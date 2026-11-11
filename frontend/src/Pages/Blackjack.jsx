@@ -2,9 +2,11 @@
 import { connecterSocket, deconnecterSocket } from "../services/socket.js";
 import { notifierSoldeMisAJour } from "../services/solde.js";
 import "./Blackjack.css";
+import Chat from "./Chat.jsx";
 import {
 	API_URL,
 	Carte,
+	idSalon,
 	lireUtilisateur,
 	mainsJoueur,
 	melangerSabot,
@@ -447,6 +449,7 @@ function Blackjack({ salon, setSalon, setIsLoggedIn, setSoldeGlobal, retourAuxSa
 	return (
 		<section className="section">
 			<div className="container">
+				<div className="chat-layout">
 				<div className="bj-table">
 					<div className="level is-mobile">
 						<div className="level-left">
@@ -569,6 +572,8 @@ function Blackjack({ salon, setSalon, setIsLoggedIn, setSoldeGlobal, retourAuxSa
 							</button>
 						</div>
 					)}
+				</div>
+				<Chat salonId={idSalon(salon)} />
 				</div>
 
 				{message && <p className="notification is-danger is-light mt-4 mb-0" role="alert">{message}</p>}
