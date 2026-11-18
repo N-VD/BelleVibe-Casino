@@ -208,9 +208,6 @@ function BlackjackCamera() {
 	}
 
 	useCaptureCamera(filme, socket, videoRef, setStatutCamera);
-	const { image, enDirect } = useImagesRecues(role !== null && !filme, socket); // en attendant le rôle : rien
-
-	const couleurStatut = { succes: "is-success", erreur: "is-danger", info: "is-info" };
 
 	return (
 		<section className="section" style={{
