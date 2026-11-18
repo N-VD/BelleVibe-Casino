@@ -289,7 +289,7 @@ function BlackjackCamera() {
 							{/* <h3>Joueurs en ligne ({joueursEnLigne.length})</h3> */}
 
 							<ul>
-								{joueursEnLigne.map((nom, index) => (
+								{joueursEnLigne.map((nom) => (
 									<div className="card bj-joueur-card">
 										<div className="card-content">
 											<p className="title is-5 mb-3">🟢 {nom}</p>
