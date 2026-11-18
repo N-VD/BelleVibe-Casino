@@ -71,7 +71,7 @@ function Chat({ salonId }) {
             {m.role === "dealer" && (
               <span className="tag is-warning is-small mr-1">Croupier</span>
             )}
-            <strong style={{ color: couleurPour(m.nom) }}>{m.nom}</strong>:{" "}
+            <strong style={{ color: couleurPour(m.nom) }}>{m.nom}</strong> :{" "}
             {m.texte}
           </li>
         ))}
@@ -90,7 +90,7 @@ function Chat({ salonId }) {
           onChange={(e) => setTexte(e.target.value)}
         />
         <button className="button is-small is-link" disabled={!connecte}>
-          Chat
+          Envoyer
         </button>
       </form>
     </aside>

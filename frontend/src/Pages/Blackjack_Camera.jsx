@@ -120,6 +120,7 @@ function BlackjackCamera() {
 	const [statutCamera, setStatutCamera] = useState(null);
 	const [montantMise, setMontantMise] = useState("");
 	const videoRef = useRef(null);
+	const [joueursEnLigne, setJoueursEnLigne] = useState([]);
 	const [maintenant, setMaintenant] = useState(Date.now);
 
 	useEffect(() => {
@@ -135,8 +136,9 @@ function BlackjackCamera() {
 			if (reponse?.role) setRole(reponse.role);
 			if (reponse?.salon) setSalon(reponse.salon);
 		});
-		const surMiseAJour = ({ salon: salonMaj } = {}) => {
+		const surMiseAJour = ({ salon: salonMaj, joueursEnLigne: joueursEnLigne } = {}) => {
 			if (salonMaj) setSalon(salonMaj);
+			if (joueursEnLigne) setJoueursEnLigne(joueursEnLigne);
 		};
 		// Le dealer a fermé le salon : retour au lobby
 		const surFermeture = () => navigate("/", { replace: true, state: { message: "Ce salon a été fermé." } });
@@ -206,83 +208,141 @@ function BlackjackCamera() {
 	}
 
 	useCaptureCamera(filme, socket, videoRef, setStatutCamera);
-	const { image, enDirect } = useImagesRecues(role !== null && !filme, socket); // en attendant le rôle : rien
-
-	const couleurStatut = { succes: "is-success", erreur: "is-danger", info: "is-info" };
+	const { image } = useImagesRecues(role !== null && !filme, socket); // en attendant le rôle : rien
 
 	return (
-		<section className="section">
-			<div className="container">
-				<div className="level is-mobile mb-4">
-					<div className="level-left"><div className="level-item">
-						<button className="button is-small is-text" onClick={quitterTable} disabled={chargement}>
-							<span className="icon"><i className="fas fa-arrow-left" /></span>
-							<span>{role === "joueur" ? "Quitter la table" : "Retour aux salons"}</span>
-						</button>
-					</div></div>
-					{role === "dealer" && <div className="level-right"><div className="level-item">
-						<button className="button is-small is-danger" onClick={fermerSalon} disabled={chargement}>
-							<span className="icon"><i className="fas fa-times" /></span><span>Fermer le salon</span>
-						</button>
-					</div></div>}
-				</div>
+		<section className="section" style={{
+			backgroundImage: "linear-gradient(rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.45)), url('/background.jpg')",
+			backgroundSize: "cover",
+			backgroundPosition: "center",
+			backgroundRepeat: "no-repeat",
+			minHeight: "calc(100vh - 4rem)",
+		}}>
+			{role !== "dealer" &&
+				<div className="container">
+					<div className="level is-mobile mb-4">
+						<div className="level-left"><div className="level-item">
+							<button className="button is-small is-text" onClick={quitterTable} disabled={chargement}>
+								<span className="icon"><i className="fas fa-arrow-left" /></span>
+								<span>{role === "joueur" ? "Quitter la table" : "Retour aux salons"}</span>
+							</button>
+						</div></div>
+					</div>
 
-				<div className="columns">
-					<div className="column">
-						<div className="bj-table">
-							<div className="level is-mobile">
-								<div className="level-left" />
-								<div className="level-right">
-									{role === "spectateur" && <span className="tag is-info mr-2"><span className="icon"><i className="fas fa-eye" /></span><span>Spectateur</span></span>}
-									<span className="tag is-dark">Salon {salonId}</span>
+					<div className="columns">
+						<div className="column">
+							<div className="bj-table">
+								<div className="level is-mobile">
+									<div className="level-left" />
+									<div className="level-right">
+										{role === "spectateur" && <span className="tag is-info mr-2"><span className="icon"><i className="fas fa-eye" /></span><span>Spectateur</span></span>}
+										<span className="tag is-dark">Salon {salonId}</span>
+									</div>
+								</div>
+								<h1 className="title has-text-centered">Blackjack</h1>
+								<p className="subtitle is-6 has-text-centered">{filme ? "Vous filmez cette table" : "Table réelle en direct"}</p>
+
+								<div className="bj-zone">
+									<div className="bj-camera">
+										{filme
+											? <video ref={videoRef} muted playsInline aria-label="Aperçu de votre caméra" />
+											: image
+												? <img src={image} alt="Caméra de la table" />
+												: <p className="bj-camera-attente">En attente de la caméra du dealer...</p>}
+									</div>
+
+									{secondesAvantManche !== null && <p className="has-text-centered mt-4">
+										<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
+									</p>}
+									{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
+
+									{role === "joueur" && (Number(moi?.bet) > 0
+										? <p className="has-text-centered mt-4"><span className="tag is-medium is-warning">Votre mise : {moi.bet} $</span></p>
+										: salon?.status !== "playing" && <form className="field has-addons has-addons-centered mt-4" onSubmit={miser}>
+												<div className="control">
+														<input className="input" type="number" min="0.01" step="0.01" placeholder="Montant"
+																value={montantMise} onChange={(e) => setMontantMise(e.target.value)} disabled={chargement} />
+												</div>
+												<div className="control">
+														<button className="button is-warning" type="submit" disabled={chargement}>Miser</button>
+												</div>
+										</form>)}
 								</div>
 							</div>
-							<h1 className="title has-text-centered">Blackjack</h1>
-							<p className="subtitle is-6 has-text-centered">{filme ? "Vous filmez cette table" : "Table réelle en direct"}</p>
+						</div>
+						{/* Chat de la table : même socket que la page (connecterSocket retourne toujours la même connexion) */}
+						<div className="column is-narrow">
+							<Chat salonId={salonId} />
+						</div>
+					</div>
 
-							<div className="bj-zone">
-								<div className="bj-camera">
+					{message && <div className="notification is-danger is-light mt-4 mb-0" role="alert">
+						<button className="delete" aria-label="Fermer la notification" onClick={() => setMessage("")} />
+						{message}
+					</div>}
+				</div>
+			} {role === "dealer" &&
+				<>
+					{/* VUE POUR LE CROUPIER */}
+					<div className="bj-croupier-page">
+						<div className="bj-croupier-colonne">
+							<div className="bj-zone bj-zone-croupier-cam">
+								<div className="bj-camera-croupier">
 									{filme
 										? <video ref={videoRef} muted playsInline aria-label="Aperçu de votre caméra" />
 										: image
 											? <img src={image} alt="Caméra de la table" />
 											: <p className="bj-camera-attente">En attente de la caméra du dealer...</p>}
 								</div>
-								{filme && statutCamera && <span className={`tag is-medium ${couleurStatut[statutCamera.type]}`} role="status">{statutCamera.texte}</span>}
-								{!filme && image && <span className={`tag is-medium ${enDirect ? "is-success" : "is-danger"}`} role="status">
-									<span className="icon"><i className="fas fa-circle" /></span><span>{enDirect ? "En direct" : "Caméra coupée"}</span>
-								</span>}
+								{statutCamera?.type === "erreur" && (
+									<span className="tag is-medium is-danger" role="status">{statutCamera.texte}</span>
+								)}
 
                                 {secondesAvantManche !== null && <p className="has-text-centered mt-4">
                                     <span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
                                 </p>}
 								{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
-
-								{role === "joueur" && (Number(moi?.bet) > 0
-								? <p className="has-text-centered mt-4"><span className="tag is-medium is-warning">Votre mise : {moi.bet} $</span></p>
-								: salon?.status !== "playing" && <form className="field has-addons has-addons-centered mt-4" onSubmit={miser}>
-										<div className="control">
-												<input className="input" type="number" min="0.01" step="0.01" placeholder="Montant"
-														value={montantMise} onChange={(e) => setMontantMise(e.target.value)} disabled={chargement} />
-										</div>
-										<div className="control">
-												<button className="button is-warning" type="submit" disabled={chargement}>Miser</button>
-										</div>
-								</form>)}
 							</div>
+
+							<Chat salonId={salonId} />
+
+							<div className="bj-croupier-boutons">
+								<button className="button is-small is-text" onClick={quitterTable} disabled={chargement}>
+									<span className="icon"><i className="fas fa-arrow-left" /></span>
+									<span>Retour aux salons</span>
+								</button>
+								<button className="button is-small is-danger" onClick={fermerSalon} disabled={chargement}>
+									<span className="icon"><i className="fas fa-times" /></span>
+									<span>Fermer le salon</span>
+								</button>
+							</div>
+
+							{message && (
+								<div className="notification is-danger is-light mt-2 mb-0" role="alert">
+									<button className="delete" aria-label="Fermer la notification" onClick={() => setMessage("")} />
+									{message}
+								</div>
+							)}
+						</div>
+						<div className="bj-joueurs-cartes">
+							{/* <h3>Joueurs en ligne ({joueursEnLigne.length})</h3> */}
+
+							<ul>
+								{joueursEnLigne.map((nom) => (
+									<div className="card bj-joueur-card">
+										<div className="card-content">
+											<p className="title is-5 mb-3">🟢 {nom}</p>
+											<p className="">Action : </p>
+											<p className="">Score main : </p>
+											<p className="">Mise : </p>
+										</div>
+									</div>
+								))}
+							</ul>
 						</div>
 					</div>
-					{/* Chat de la table : même socket que la page (connecterSocket retourne toujours la même connexion) */}
-					<div className="column is-narrow">
-						<Chat salonId={salonId} />
-					</div>
-				</div>
-
-				{message && <div className="notification is-danger is-light mt-4 mb-0" role="alert">
-					<button className="delete" aria-label="Fermer la notification" onClick={() => setMessage("")} />
-					{message}
-				</div>}
-			</div>
+				</>
+			}
 		</section>
 	);
 }

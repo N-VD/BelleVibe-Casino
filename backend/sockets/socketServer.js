@@ -19,8 +19,16 @@ function avecDebutManche(salonId, salon) {
 /** Entrées : room du salon et salon (objet); sortie : aucune. Chaque connexion de la room reçoit la vue de son rôle. */
 async function diffuserTable(salonId, salon) {
 	const connexions = await io.in(salonId).fetchSockets();
+
+	const joueursEnLigne = new Set(
+		connexions
+			.filter((c) => c.data.role === "joueur" && c.data.user)
+			.map((c) => String(c.data.user.nom)),
+	);
+
 	for (const connexion of connexions) {
 		connexion.emit("game:update", {
+			joueursEnLigne: [...joueursEnLigne],
 			salon: vuePourRole(avecDebutManche(salonId, salon), connexion.data.role),
 			message: `Mise à jour de la table pour le salon ${salonId}`,
 		});
@@ -140,7 +148,7 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 
 		// Le rôle (dealer, joueur, spectateur) est calculé ici à partir du token, jamais envoyé par le client
 		socket.on("join", async (salonId, ack) => {
-			const repondre = typeof ack === "function" ? ack : () => {}; // Blackjack.jsx n'attend pas de réponse
+			const repondre = typeof ack === "function" ? ack : () => { }; // Blackjack.jsx n'attend pas de réponse
 			try {
 				if (!mongoose.isValidObjectId(salonId))
 					return repondre({ error: "Salon invalide." });
@@ -156,7 +164,8 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 				socket.data.role = role;
 				// Un joueur déconnecté qui revient à temps garde sa place
 				if (socket.data.user) annulerDepart(room, socket.data.user.id);
-				repondre({ salon: vuePourRole(avecDebutManche(room, salon.toObject()), role), role });			
+				repondre({ salon: vuePourRole(avecDebutManche(room, salon.toObject()), role), role });	
+				await diffuserTable(room, salon.toObject());
 			} catch (err) {
 				console.error(err);
 				repondre({ error: "Erreur du serveur : join." });
@@ -224,16 +233,18 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 
 		// Le joueur quitte volontairement (le front l'a averti que sa main est perdue) : sa place est retirée tout de suite
 		socket.on("leave", async (ack) => {
-			const repondre = typeof ack === "function" ? ack : () => {};
+			const repondre = typeof ack === "function" ? ack : () => { };
 			const { salonId, role, user } = socket.data;
 			try {
+				// On quitte la room d'abord, pour ne plus être compté « en ligne »
+				if (salonId) socket.leave(salonId);
+				socket.data.salonId = null;
+				socket.data.role = null;
+
 				if (salonId && role === "joueur") {
 					annulerDepart(salonId, user.id);
 					await retirerJoueur(salonId, user.id);
 				}
-				if (salonId) socket.leave(salonId);
-				socket.data.salonId = null;
-				socket.data.role = null;
 				repondre({ ok: true });
 			} catch (err) {
 				console.error(err);
@@ -243,7 +254,7 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 
 		// Le dealer (créateur) ferme le salon depuis la table : mêmes règles que DELETE /deleteSalon
 		socket.on("salon:close", async (ack) => {
-			const repondre = typeof ack === "function" ? ack : () => {};
+			const repondre = typeof ack === "function" ? ack : () => { };
 			const { salonId, role } = socket.data;
 			if (!salonId || role !== "dealer")
 				return repondre({ error: "Seul le dealer de ce salon peut le fermer." });
@@ -279,6 +290,9 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 			const connexions = await io.in(salonId).fetchSockets();
 			if (connexions.some((connexion) => String(connexion.data.user?.id) === String(user.id)))
 				return; // un autre onglet est encore là
+
+			const salon = await Salon.findById(salonId);
+			if (salon) await diffuserTable(salonId, salon.toObject());
 			annulerDepart(salonId, user.id);
 			departs.set(
 				`${salonId}:${user.id}`,

@@ -93,7 +93,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                     <Link
                         to="/"
                         className="navbar-item navbar-brand-link has-text-weight-bold has-text-white"
-                        style={{ fontSize: "1.7rem", letterSpacing: "0.04em" }}
+                        style={{ fontSize: "clamp(1.1rem, 4vw, 1.7rem)", letterSpacing: "0.04em" }}
                     >
                         BelleVibe Casino
                     </Link>
@@ -101,7 +101,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                 <div className="navbar-end">
                     {isLoggedIn && !isComptePage && (soldeGlobal ?? solde) !== null && (
                         <div className="navbar-item">
-                            <span className="tag is-success is-medium" style={{ fontSize: "0.95rem" }}>
+                            <span className="tag is-success">
                                 <span className="icon"><i className="fas fa-coins" /></span>
                                 <span>Solde : {formatArgent(soldeGlobal ?? solde)}</span>
                             </span>
@@ -117,7 +117,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                                 </div>
                             )}
                             <div className="navbar-item">
-                                <button className="button is-light" onClick={handleLogout}>
+                                <button className="button is-danger" onClick={handleLogout}>
                                     Se déconnecter
                                 </button>
                             </div>
@@ -136,13 +136,13 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                             </div>
                         </>
                     )}
-                    <div className="navbar-item">
+                    {/* <div className="navbar-item">
                         {isLoggedIn ? (
                             <span className="tag is-success">Connecté</span>
                         ) : (
                             <span className="tag is-warning">Non connecté</span>
                         )}
-                    </div>
+                    </div> */}
                 </div>
             </nav>
         </div>
