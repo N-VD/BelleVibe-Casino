@@ -9,7 +9,9 @@ const playerInSalonSchema = new mongoose.Schema({
   activeHand: { type: Number, default: 0 },
   bet: { type: Number, default: 0 },
   status: { type: String, default: 'waiting' }, // waiting, finished
-  isTurn: { type: Boolean, default: false }
+  isTurn: { type: Boolean, default: false },
+  pendingAction: { type: String, default: null },
+  pendingCardCount: { type: Number, default: null }
 }, { _id: false });
 
 const salonSchema = new mongoose.Schema({
@@ -19,6 +21,7 @@ const salonSchema = new mongoose.Schema({
   deck: { type: Array, default: [] },
   players: [playerInSalonSchema], // Tableau de joueurs à la table
   currentTurnSeat: { type: Number, default: 0 },
+  dealComplete: { type: Boolean, default: false }, // toutes les mains initiales ont été détectées
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now }
 });

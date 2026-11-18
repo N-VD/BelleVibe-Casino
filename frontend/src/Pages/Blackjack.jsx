@@ -54,14 +54,14 @@ function Blackjack({ salon, setSalon, setIsLoggedIn, setSoldeGlobal, retourAuxSa
 		});
 		rejoindre();
 		socket.on("connect", rejoindre);
-		socket.on("mise_a_jour_table", (data) => {
+		socket.on("game:update", (data) => {
 			if (data.salon) {
 				setSalon(data.salon);
 			}
 		});
 		return () => {
 			socket.off("connect", rejoindre);
-			socket.off("mise_a_jour_table");
+			socket.off("game:update");
 			deconnecterSocket();
 		};
 	}, [salonId, setSalon]);
@@ -195,7 +195,7 @@ function Blackjack({ salon, setSalon, setIsLoggedIn, setSoldeGlobal, retourAuxSa
 		setSabot(nextDeck);
 		setResultats(prochainsResultats);
 		const socket = connecterSocket();
-		socket.emit("game:action", { salonMaj: salonMisAJour }); // le serveur connaît déjà le salon de ce socket
+		socket.emit("game:action"); // le serveur rediffuse l'état enregistré, sans accepter un état client
 		window.clearTimeout(minuterieAnimation.current);
 		if (nouveauPlan.duree > 0) {
 			setPlanAnimation(nouveauPlan);

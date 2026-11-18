@@ -148,15 +148,27 @@ Il n'y a pas de route de déconnexion : le frontend supprime simplement le token
 
 ## 5. Événements Socket.IO
 
-Même serveur et même port que l'API (3000), CORS limité à `http://localhost:5173`.
+Socket.IO partage le serveur HTTP et le port 3000 avec l'API. Le CORS navigateur est limité à `http://localhost:5173`. Le client transmet son JWT au handshake; le rôle (dealer, joueur ou spectateur) est calculé par le backend.
 
-| Sens               | Événement           | Données                    | Effet                                                     |
-| ------------------ | --------------------- | --------------------------- | --------------------------------------------------------- |
-| Client → serveur  | `rejoindre_salon`   | identifiant du salon        | Le socket rejoint la salle du salon                       |
-| Client → serveur  | `action_jeu`        | `{ codeSalon, salonMaj }` | Le serveur relaie l'état reçu à toute la salle         |
-| Serveur → clients | `mise_a_jour_table` | `{ salon, message }`      | Les clients de la salle remplacent leur état de la table |
+| Sens | Événement | Données | Effet |
+| --- | --- | --- | --- |
+| Client → serveur | `join` | identifiant du salon | Rejoint la room du salon et reçoit son état ainsi que son rôle. |
+| Client → serveur | `game:miser` | `{ mise }` | Vérifie et débite la mise du joueur; la première mise lance le délai de 10 secondes. |
+| Serveur → clients | `game:update` | `{ salon, message }` | Diffuse l'état enregistré, filtré selon le rôle. |
+| Client → serveur | `game:move` | `{ action: "hit" \| "stand" \| "double" }` | Valide le tour; hit/double attendent que la détection confirme une nouvelle carte. |
+| Client → serveur | `game:action` | aucun | Compatibilité avec l'ancienne page : rediffuse l'état sauvegardé, sans relayer de données client. |
+| Dealer navigateur → serveur → détection | `frame` | image JPEG | Relais de l'image à la salle et au service Python. |
+| Service Python → serveur | `cartes` | `{ salonId, mains }` | Met à jour les cartes; le backend applique l'état de la manche et son règlement. |
+| Client ↔ serveur | `chat_rejoindre`, `chat_envoyer`, etc. | messages de chat | Historique et messages de la room `chat:<salonId>`. |
+| Serveur → clients | `salon:closed`, `game:error` | information d'état | Ferme l'écran de table ou signale une erreur de traitement. |
 
-Aucune authentification sur la connexion socket pour l'instant (voir D10).
+### Règles du blackjack filmé
+
+Le format envoyé par le service Python n'est pas modifié. Après le délai des mises, le backend attend deux cartes détectées pour chaque joueur ayant misé et au moins une carte du croupier. Il décide ensuite du tour, valide `hit`, `stand` ou `double`, met à jour les mains lorsque la détection confirme les cartes, puis règle la manche lorsque tous les joueurs ont terminé et que le croupier atteint au moins 17 (ou que tous les joueurs ont dépassé 21). La mise est débitée à `game:miser`; le double débite la mise supplémentaire et le règlement crédite le retour.
+
+Le split est volontairement non pris en charge dans ce flux : `mains.joueurs` contient des groupes ordonnés sans identifiant de siège, ce qui ne permet pas de rattacher sûrement deux mains séparées à leur joueur.
+
+Cette intégration concerne la table filmée (`/jeux/blackjack-camera/:id`). L'ancienne page `/jeux/blackjack` conserve son flux REST `/gameStatus` et son propre calcul de manche.
 
 ## 6. Modèle de données
 

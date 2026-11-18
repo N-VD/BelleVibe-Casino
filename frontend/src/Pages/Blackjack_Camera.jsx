@@ -3,11 +3,17 @@ import { useNavigate, useParams } from "react-router-dom";
 import { connecterSocket } from "../services/socket.js";
 import "./Blackjack.css";
 import Chat from "./Chat.jsx";
-import { lireUtilisateur } from "./reglesBlackjack/outils.js";
+import { lireUtilisateur, totalMain } from "./reglesBlackjack/outils.js";
 
 const FPS_ENVOI = 10;
 const QUALITE_JPEG = 0.7;
 const DELAI_IMAGE_PERDUE = 3000; // ms sans image avant d'afficher « caméra coupée »
+const LIBELLES_RESULTATS = {
+	blackjack: "Blackjack",
+	gagne: "Gagné",
+	egalite: "Égalité",
+	perdu: "Perdu",
+};
 
 /** Entrée : message d'erreur de getUserMedia; sortie : texte lisible pour le dealer. */
 function messageErreurCamera(erreur) {
@@ -140,14 +146,17 @@ function BlackjackCamera() {
 		};
 		// Le dealer a fermé le salon : retour au lobby
 		const surFermeture = () => navigate("/", { replace: true, state: { message: "Ce salon a été fermé." } });
+		const surErreur = ({ message: erreur } = {}) => setMessage(erreur ?? "Erreur pendant la partie.");
 		rejoindre();
 		socket.on("connect", rejoindre);
 		socket.on("game:update", surMiseAJour);
 		socket.on("salon:closed", surFermeture);
+		socket.on("game:error", surErreur);
 		return () => {
 			socket.off("connect", rejoindre);
 			socket.off("game:update", surMiseAJour);
 			socket.off("salon:closed", surFermeture);
+			socket.off("game:error", surErreur);
 		};
 	}, [socket, salonId, navigate]);
 
@@ -161,6 +170,16 @@ function BlackjackCamera() {
                 : null;
 
 	const moi = salon?.players?.find((player) => String(player.id_compte) === String(lireUtilisateur()?.id));
+
+	const cartesCroupier = salon?.dealer_hand ?? [];
+	const totalCroupier = totalMain(cartesCroupier);
+	const resultatCroupier = cartesCroupier.length === 0
+		? "Aucune carte détectée."
+		: totalCroupier > 21
+			? "Le croupier a dépassé 21."
+			: cartesCroupier.length === 2 && totalCroupier === 21
+				? "Blackjack du croupier."
+				: `Le croupier termine avec ${totalCroupier} points.`;
 
 	/** Entrée : nom de l'événement; sortie : Promise de la réponse du serveur (erreur si pas de réponse en 5 s). */
 	function demander(evenement, ...donnees) {
@@ -205,10 +224,19 @@ function BlackjackCamera() {
         setMontantMise("");
 	}
 
+	async function jouer(action) {
+        setChargement(true);
+        const reponse = await demander("game:move", { action });
+        setChargement(false);
+        if (reponse?.error) setMessage(reponse.error);
+	}
+
 	useCaptureCamera(filme, socket, videoRef, setStatutCamera);
 	const { image, enDirect } = useImagesRecues(role !== null && !filme, socket); // en attendant le rôle : rien
 
 	const couleurStatut = { succes: "is-success", erreur: "is-danger", info: "is-info" };
+	const maMain = moi?.hands?.[0];
+	const monTour = role === "joueur" && salon?.status === "playing" && moi?.isTurn;
 
 	return (
 		<section className="section">
@@ -253,10 +281,49 @@ function BlackjackCamera() {
 									<span className="icon"><i className="fas fa-circle" /></span><span>{enDirect ? "En direct" : "Caméra coupée"}</span>
 								</span>}
 
-                                {secondesAvantManche !== null && <p className="has-text-centered mt-4">
-                                    <span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
-                                </p>}
+								{secondesAvantManche !== null && <p className="has-text-centered mt-4">
+									<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
+								</p>}
 								{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
+
+								{role === "joueur" && maMain && maMain.cartes?.length > 0 && (
+									<div className="has-text-centered mt-4">
+										<p>Votre main : {maMain.cartes.map((carte) => carte.rang).join(", ")} · Total : {totalMain(maMain.cartes)}</p>
+										{maMain.status === "bust" && <p>Dépassé 21</p>}
+										{maMain.status === "blackjack" && <p>Blackjack naturel</p>}
+										{salon?.status === "finished" && moi.resultats?.[0] && (
+											<p>Résultat : {LIBELLES_RESULTATS[moi.resultats[0]] ?? moi.resultats[0]}</p>
+										)}
+									</div>
+								)}
+								{salon?.status === "finished" && (
+									<div className="notification is-info is-light mt-4" aria-live="polite">
+										<p className="has-text-weight-semibold">Résultat du croupier</p>
+										<p>Cartes : {cartesCroupier.map((carte) => carte?.rang ?? "?").join(", ") || "Aucune carte détectée"}</p>
+										{cartesCroupier.length > 0 && <p>Total : {totalCroupier} · {resultatCroupier}</p>}
+									</div>
+								)}
+								{salon?.status === "playing" && !salon.dealComplete && (
+									<p className="has-text-centered mt-4">En attente de la détection des cartes initiales.</p>
+								)}
+								{monTour && (
+									<div className="buttons is-centered mt-4">
+										<button className="button is-link" onClick={() => jouer("hit")} disabled={chargement || moi.pendingAction}>
+											Tirer
+										</button>
+										<button className="button is-light" onClick={() => jouer("stand")} disabled={chargement || moi.pendingAction}>
+											Rester
+										</button>
+										{maMain?.cartes?.length === 2 && (
+											<button className="button is-warning" onClick={() => jouer("double")} disabled={chargement || moi.pendingAction}>
+												Doubler
+											</button>
+										)}
+									</div>
+								)}
+								{moi?.pendingAction && <p className="has-text-centered mt-2">En attente de la carte détectée...</p>}
+								{salon?.status === "playing" && salon.dealComplete && role === "joueur" && !moi?.isTurn
+									&& moi?.status === "playing" && <p className="has-text-centered mt-4">En attente de votre tour.</p>}
 
 								{role === "joueur" && (Number(moi?.bet) > 0
 								? <p className="has-text-centered mt-4"><span className="tag is-medium is-warning">Votre mise : {moi.bet} $</span></p>

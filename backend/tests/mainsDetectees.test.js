@@ -62,6 +62,18 @@ test("un joueur qui n'a pas misé ne reçoit pas de main et garde ses hands", ()
     assert.deepEqual(joueur(salon, 'joueurSiege2').hands[0].cartes, [{ rang: '5' }, { rang: '5' }]);
 });
 
+test("une détection sans groupe ne remplace pas les cartes déjà connues", () => {
+    const salon = fauxSalon();
+    salon.players[0].hands = [{ cartes: [{ rang: 'A' }], mise: 20, status: 'playing' }];
+
+    attribuerMains(salon, {
+        croupier: null,
+        joueurs: [mainDetectee(1, ['10', '9'])],
+    });
+
+    assert.deepEqual(joueur(salon, 'joueurSiege2').hands[0].cartes, [{ rang: 'A' }]);
+});
+
 test('moins de mains que de joueurs : le joueur sans main reçoit cartes []', () => {
     const salon = fauxSalon();
     attribuerMains(salon, { croupier: null, joueurs: [mainDetectee(1, ['10', '9'])] });
@@ -76,4 +88,23 @@ test('plus de mains que de joueurs : les mains en trop sont ignorées sans plant
     });
     assert.deepEqual(joueur(salon, 'joueurSiege0').hands[0].cartes, [{ rang: '2' }]);
     assert.deepEqual(joueur(salon, 'joueurSiege2').hands[0].cartes, [{ rang: '3' }]);
+});
+
+test('attribuerMains conserve les états de jeu sur la main mise à jour par la caméra', () => {
+    const salon = fauxSalon();
+    salon.players[0].hands = [{
+        cartes: [{ rang: '5' }],
+        mise: 20,
+        status: 'playing',
+        double: true,
+    }];
+
+    attribuerMains(salon, {
+        croupier: null,
+        joueurs: [mainDetectee(1, ['10', '9']), mainDetectee(2, ['5', '6'])],
+    });
+
+    assert.equal(joueur(salon, 'joueurSiege2').hands[0].status, 'playing');
+    assert.equal(joueur(salon, 'joueurSiege2').hands[0].double, true);
+    assert.deepEqual(joueur(salon, 'joueurSiege2').hands[0].cartes, [{ rang: '5' }, { rang: '6' }]);
 });

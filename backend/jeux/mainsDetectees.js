@@ -21,7 +21,12 @@ function attribuerMains(salon, mains) {
     // On parcourt les joueurs : les mains détectées en trop sont ignorées (split pas encore géré)
     joueurs.forEach((player, i) => {
         const mainDetectee = mains?.joueurs?.[i];
-        player.hands = [{ cartes: versCartes(mainDetectee?.cartes), mise: player.bet }];
+        const ancienneMain = player.hands?.[0] ?? {};
+        player.hands = [{
+            ...ancienneMain,
+            cartes: mainDetectee ? versCartes(mainDetectee.cartes) : (ancienneMain.cartes ?? []),
+            mise: player.bet
+        }];
     });
 }
 
