@@ -13,14 +13,19 @@ function Login({ setIsLoggedIn, setIsGuest }) {
     event.preventDefault();
     setMessage("");
 
+    const identifiantPropre = identifiant.trim();
+    const passwordPropre = password.trim();
 
 
 
-    try {
+try {
       const response = await fetch("http://localhost:3000/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifiant, password }),
+        body: JSON.stringify({ 
+          identifiant: identifiantPropre, 
+          password: passwordPropre 
+        }),
       });
       const data = await response.json();
 
@@ -36,7 +41,6 @@ function Login({ setIsLoggedIn, setIsGuest }) {
       setMessage("Impossible de joindre le serveur. Réessayez plus tard.");
     }
   }
-
   // Sans compte : même lobby et mêmes tables, le socket donne le rôle spectateur
   function passerAuModeSpectateur() {
     sessionStorage.setItem("guest", "true");
