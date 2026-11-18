@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { API_URL } from "./reglesBlackjack/outils.js";
 import "./Navbar.css";
 
 export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
     const location = useLocation();
+    const navigate = useNavigate();
     const isComptePage = location.pathname === "/compte";
     const [solde, setSolde] = useState(null);
 
+    // Déconnecté : pas besoin de remettre solde à null, il n'est affiché que si isLoggedIn
+    // (et la déconnexion recharge la page)
     useEffect(() => {
         let annule = false;
         const controleur = new AbortController();
@@ -65,7 +68,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
     function handleLogout() {
         localStorage.removeItem("token");
         setIsLoggedIn(false);
-        window.location.href = "/";
+        navigate("/login", { replace: true });
     }
 
     function formatArgent(montant) {
@@ -96,7 +99,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                     </Link>
                 </div>
                 <div className="navbar-end">
-                    {isLoggedIn && (soldeGlobal ?? solde) !== null && (
+                    {isLoggedIn && !isComptePage && (soldeGlobal ?? solde) !== null && (
                         <div className="navbar-item">
                             <span className="tag is-success is-medium" style={{ fontSize: "0.95rem" }}>
                                 <span className="icon"><i className="fas fa-coins" /></span>
@@ -108,7 +111,7 @@ export default function Navbar({ isLoggedIn, setIsLoggedIn, soldeGlobal }) {
                         <>
                             {!isComptePage && (
                                 <div className="navbar-item">
-                                    <button className="button is-light" onClick={() => window.location.href = "/compte"}>
+                                    <button className="button is-light" onClick={() => navigate("/compte")}>
                                         Compte
                                     </button>
                                 </div>
