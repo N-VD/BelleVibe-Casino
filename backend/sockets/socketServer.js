@@ -1,6 +1,8 @@
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const Salon = require("../models/salon");
+const Compte = require("../models/compte");
+const Transaction = require("../models/transaction");
 const { lireToken } = require("../fonctionsCommunes");
 const { roleDansSalon, vuePourRole } = require("../jeux/vueTable");
 const { attribuerMains } = require("../jeux/mainsDetectees");
@@ -8,6 +10,11 @@ const { initialiserChat } = require("./chat");
 
 let io = null; // gardé pour notifierSalonFerme (appelé depuis la route DELETE /deleteSalon)
 const departs = new Map(); // "salonId:compteId" -> minuterie d'un joueur déconnecté sans prévenir
+const debutsManche = new Map(); // salonId -> { minuterie, debut } : délai des mises avant la manche
+
+function avecDebutManche(salonId, salon) {
+    return { ...salon, debut_manche: debutsManche.get(salonId)?.debut ?? null };
+}
 
 /** Entrées : room du salon et salon (objet); sortie : aucune. Chaque connexion de la room reçoit la vue de son rôle. */
 async function diffuserTable(salonId, salon) {
@@ -21,8 +28,8 @@ async function diffuserTable(salonId, salon) {
 
 	for (const connexion of connexions) {
 		connexion.emit("game:update", {
-			salon: vuePourRole(salon, connexion.data.role),
 			joueursEnLigne: [...joueursEnLigne],
+			salon: vuePourRole(avecDebutManche(salonId, salon), connexion.data.role),
 			message: `Mise à jour de la table pour le salon ${salonId}`,
 		});
 	}
@@ -48,6 +55,28 @@ function annulerDepart(salonId, compteId) {
 	departs.delete(cle);
 }
 
+/** Entrées : salon et délai (ms); lance la minuterie qui démarre la manche. */
+function planifierDebut(salonId, delai) {
+        const minuterie = setTimeout(() => {
+                debutsManche.delete(salonId);
+                demarrerManche(salonId).catch((err) => console.error(err));
+        }, delai);
+        debutsManche.set(salonId, { minuterie, debut: Date.now() + delai });
+}
+
+/** Entrée : salon; fin du délai des mises : la manche commence s'il reste au moins une mise, et la table est prévenue. */
+async function demarrerManche(salonId) {
+        const salon =
+                (await Salon.findOneAndUpdate(
+                        { _id: salonId, status: "waiting", "players.bet": { $gt: 0 } },
+                        { $set: { status: "playing", updated_at: new Date() } },
+                        { returnDocument: "after" },
+                ))
+                // Plus aucune mise (joueurs partis) : rien ne démarre, mais la table doit voir le compte à rebours disparaître
+                ?? (await Salon.findById(salonId));
+        if (salon) await diffuserTable(salonId, salon.toObject());
+}
+
 /** Entrée : id du salon supprimé; prévient la table ("salon:closed") et vide sa room. */
 function notifierSalonFerme(salonId) {
 	if (!io) return;
@@ -60,13 +89,15 @@ function notifierSalonFerme(salonId) {
 			departs.delete(cle);
 		}
 	}
+	clearTimeout(debutsManche.get(room)?.minuterie);
+	debutsManche.delete(room);
 }
 
 /**
  * Entrées : serveur HTTP et options (delaiRetourMs : temps laissé à un joueur déconnecté pour revenir);
  * sortie : l'instance Socket.IO.
  */
-function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000 } = {}) {
+function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMisesMs = 10_000 } = {}) {	
 	io = new Server(httpServer, {
 		cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] },
 		maxHttpBufferSize: 2e6, // images JPEG de la caméra
@@ -133,8 +164,7 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000 } = {}) {
 				socket.data.role = role;
 				// Un joueur déconnecté qui revient à temps garde sa place
 				if (socket.data.user) annulerDepart(room, socket.data.user.id);
-				repondre({ salon: vuePourRole(salon.toObject(), role), role });
-
+				repondre({ salon: vuePourRole(avecDebutManche(room, salon.toObject()), role), role });	
 				await diffuserTable(room, salon.toObject());
 			} catch (err) {
 				console.error(err);
@@ -148,6 +178,57 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000 } = {}) {
 			if (!salonId || (role !== "joueur" && role !== "dealer")) return;
 			if (!salonMaj || typeof salonMaj !== "object") return;
 			await diffuserTable(salonId, salonMaj);
+		});
+
+
+		socket.on("game:miser", async ({ mise } = {}, ack) => {
+				const repondre = typeof ack === "function" ? ack : () => {};
+				const { salonId, role, user } = socket.data;
+				if (!salonId || role !== "joueur")
+						return repondre({ error: "Seul un joueur du salon peut miser." });
+				if (typeof mise !== "number" || !Number.isFinite(mise) || mise <= 0)
+						return repondre({ error: "Mise invalide." });
+				const montant = Math.round(mise * 100) / 100; // au cent près
+
+				try {
+						// 1. Réserver la mise : ne passe que si la manche n'est pas commencée et que le joueur n'a pas déjà misé
+						const reserve = await Salon.updateOne(
+								{
+										_id: salonId,
+										status: { $ne: "playing" },
+										players: { $elemMatch: { id_compte: user.id, bet: 0 } },
+								},
+								{ $set: { "players.$.bet": montant, updated_at: new Date() } },
+						);
+						if (reserve.modifiedCount === 0)
+								return repondre({ error: "Mise impossible (manche en cours ou déjà misé)." });
+
+						// 2. Débiter le compte seulement si le solde suffit (une seule opération Mongo : pas de double débit)
+						const compte = await Compte.findOneAndUpdate(
+								{ _id: user.id, montant: { $gte: montant } },
+								{ $inc: { montant: -montant } },
+								{ new: true },
+						);
+						if (!compte) {
+								// 3. Solde insuffisant : on annule la réservation
+								await Salon.updateOne(
+										{ _id: salonId, "players.id_compte": user.id },
+										{ $set: { "players.$.bet": 0 } },
+								);
+								return repondre({ error: "Solde insuffisant." });
+						}
+						await Transaction.create({ id_compte: user.id, desc: "Mise blackjack en salon", montant: -montant });
+						// Première mise de la manche : has puis set sans await entre les deux, donc une seule minuterie même si deux joueurs misent en même temps
+						if (!debutsManche.has(salonId)) planifierDebut(salonId, delaiMisesMs);
+						
+						const salon = await Salon.findById(salonId);
+						if (salon) await diffuserTable(salonId, salon.toObject());
+						repondre({ ok: true, solde: compte.montant });
+				} catch (err) {
+						console.error(err);
+						console.error("Erreur du serveur : game:miser.");
+						repondre({ error: "Impossible de miser pour le moment." });
+				}
 		});
 
 		// Le joueur quitte volontairement (le front l'a averti que sa main est perdue) : sa place est retirée tout de suite

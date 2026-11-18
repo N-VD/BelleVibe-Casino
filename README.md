@@ -9,12 +9,13 @@ Raphaël, Jérôme, Daniel, Kerian, Andy
 ## Créer le fichier d'environnement
 
 ```bash
-DB_USER="admin"
-DB_PASSWORD="bellevibe_casino"
-DB_NAME="myapp"
+DB_USER=admin
+DB_PASSWORD=bellevibe_casino
+DB_NAME=myapp
 
-GITHUB_CLIENT_ID="Ov23liBGIMJCBKO9QRpr"
-GITHUB_CLIENT_SECRET="841528215a85ca7950b77dcce321b2781ac2621f"
+GITHUB_CLIENT_ID=Ov23liBGIMJCBKO9QRpr
+GITHUB_CLIENT_SECRET=a570d5da40f06412149630e3e1b2070b431c81a2
+CLE_DETECTION=480de728e44dcc669aaf7457486ad3eb
 ```
 
 ## Lancer l'application

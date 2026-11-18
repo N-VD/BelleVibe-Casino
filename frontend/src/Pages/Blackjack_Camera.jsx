@@ -118,13 +118,16 @@ function BlackjackCamera() {
 	const [message, setMessage] = useState("");
 	const [chargement, setChargement] = useState(false);
 	const [statutCamera, setStatutCamera] = useState(null);
+	const [montantMise, setMontantMise] = useState("");
 	const videoRef = useRef(null);
 	const [joueursEnLigne, setJoueursEnLigne] = useState([]);
+	const [maintenant, setMaintenant] = useState(Date.now);
 
 	useEffect(() => {
 		socket.connect(); // reconnecte le même socket si le composant est remonté (StrictMode)
 		return () => socket.disconnect();
 	}, [socket]);
+	
 
 	// Rejoindre la room Socket.IO du salon (et la rejoindre de nouveau après une reconnexion)
 	useEffect(() => {
@@ -150,20 +153,29 @@ function BlackjackCamera() {
 		};
 	}, [socket, salonId, navigate]);
 
+	useEffect(() => {
+                if (salon?.status !== "waiting" || !salon?.debut_manche) return undefined;
+                const minuterie = window.setInterval(() => setMaintenant(Date.now()), 250);
+                return () => window.clearInterval(minuterie);
+        }, [salon?.status, salon?.debut_manche]);
+        const secondesAvantManche = salon?.status === "waiting" && salon?.debut_manche
+                ? Math.max(0, Math.ceil((new Date(salon.debut_manche) - maintenant) / 1000))
+                : null;
+
+	const moi = salon?.players?.find((player) => String(player.id_compte) === String(lireUtilisateur()?.id));
+
 	/** Entrée : nom de l'événement; sortie : Promise de la réponse du serveur (erreur si pas de réponse en 5 s). */
-	function demander(evenement) {
-		return new Promise((resoudre) => {
-			socket.timeout(5000).emit(evenement, (erreur, reponse) => {
-				resoudre(erreur ? { error: "Le serveur ne répond pas." } : reponse);
+	function demander(evenement, ...donnees) {
+			return new Promise((resoudre) => {
+					socket.timeout(5000).emit(evenement, ...donnees, (erreur, reponse) => {
+							resoudre(erreur ? { error: "Le serveur ne répond pas." } : reponse);
+					});
 			});
-		});
-	}
+	}	
 
 	/** Entrée : aucune; sortie : Promise résolue après le départ (un joueur perd sa place et sa main). */
 	async function quitterTable() {
 		if (role === "joueur") {
-			const monId = lireUtilisateur().id;
-			const moi = salon?.players?.find((player) => String(player.id_compte) === String(monId));
 			const mainEnJeu = salon?.status === "playing" || Number(moi?.bet) > 0 || moi?.hands?.some((main) => main.cartes?.length > 0);
 			if (mainEnJeu && !window.confirm("Votre main sera perdue et votre place libérée. Quitter quand même ?")) return;
 			setChargement(true);
@@ -182,6 +194,17 @@ function BlackjackCamera() {
 		setChargement(false);
 		if (reponse?.error) return setMessage(reponse.error);
 		navigate("/");
+	}
+
+	async function miser(evenement) {
+		evenement.preventDefault();
+        const mise = Number(montantMise);
+        if (!Number.isFinite(mise) || mise <= 0) return setMessage("Entrez une mise plus grande que 0.");
+        setChargement(true);
+        const reponse = await demander("game:miser", { mise });
+        setChargement(false);
+        if (reponse?.error) return setMessage(reponse.error);
+        setMontantMise("");
 	}
 
 	useCaptureCamera(filme, socket, videoRef, setStatutCamera);
@@ -233,6 +256,24 @@ function BlackjackCamera() {
 									{!filme && image && <span className={`tag is-medium ${enDirect ? "is-success" : "is-danger"}`} role="status">
 										<span className="icon"><i className="fas fa-circle" /></span><span>{enDirect ? "En direct" : "Caméra coupée"}</span>
 									</span>}
+
+
+									{secondesAvantManche !== null && <p className="has-text-centered mt-4">
+										<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
+									</p>}
+									{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
+
+									{role === "joueur" && (Number(moi?.bet) > 0
+										? <p className="has-text-centered mt-4"><span className="tag is-medium is-warning">Votre mise : {moi.bet} $</span></p>
+										: salon?.status !== "playing" && <form className="field has-addons has-addons-centered mt-4" onSubmit={miser}>
+												<div className="control">
+														<input className="input" type="number" min="0.01" step="0.01" placeholder="Montant"
+																value={montantMise} onChange={(e) => setMontantMise(e.target.value)} disabled={chargement} />
+												</div>
+												<div className="control">
+														<button className="button is-warning" type="submit" disabled={chargement}>Miser</button>
+												</div>
+										</form>)}
 								</div>
 							</div>
 						</div>
@@ -263,6 +304,11 @@ function BlackjackCamera() {
 								{statutCamera?.type === "erreur" && (
 									<span className="tag is-medium is-danger" role="status">{statutCamera.texte}</span>
 								)}
+
+                                {secondesAvantManche !== null && <p className="has-text-centered mt-4">
+                                    <span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
+                                </p>}
+								{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
 							</div>
 
 							<Chat salonId={salonId} />

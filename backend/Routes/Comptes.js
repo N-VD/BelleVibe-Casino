@@ -55,12 +55,17 @@ router.post('/register', async (req, res) => {
 
 router.post('/login', async (req, res) => {
     // L'identifiant peut être le nom d'utilisateur ou le courriel
-    const identifiant = req.body.identifiant ?? req.body.nom;
-    const { password } = req.body;
-    // contre le Injection NoSQL
-    if (typeof identifiant !== 'string' || typeof password !== 'string') {
+    const identifiantBrut = req.body.identifiant ?? req.body.nom;
+    const passwordBrut = req.body.password;
+
+    // contre l'injection NoSQL
+    if (typeof identifiantBrut !== 'string' || typeof passwordBrut !== 'string') {
         return res.status(400).json({ message: MESSAGE_CONNEXION_INVALIDE });
     }
+    
+    // Nettoyage des espaces
+    const identifiant = identifiantBrut.trim();
+    const password = passwordBrut.trim();
 
     const validation = validerChamps({ identifiant, password });
     if (validation !== true) {
