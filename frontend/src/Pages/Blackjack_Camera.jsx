@@ -252,11 +252,6 @@ function BlackjackCamera() {
 												? <img src={image} alt="Caméra de la table" />
 												: <p className="bj-camera-attente">En attente de la caméra du dealer...</p>}
 									</div>
-									{filme && statutCamera && <span className={`tag is-medium ${couleurStatut[statutCamera.type]}`} role="status">{statutCamera.texte}</span>}
-									{!filme && image && <span className={`tag is-medium ${enDirect ? "is-success" : "is-danger"}`} role="status">
-										<span className="icon"><i className="fas fa-circle" /></span><span>{enDirect ? "En direct" : "Caméra coupée"}</span>
-									</span>}
-
 
 									{secondesAvantManche !== null && <p className="has-text-centered mt-4">
 										<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
