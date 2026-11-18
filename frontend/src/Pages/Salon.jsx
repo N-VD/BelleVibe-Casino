@@ -146,7 +146,7 @@ function Salon({ setIsLoggedIn }) {
 		>
 			<div className="container">
 				<div className="level is-mobile" style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "2.2rem" }}>
-					<h1 className="title is-2 mb-0">Salons de blackjack</h1>
+					<h1 className="title is-2 mb-0" style={{ color : "#d4af37"}}>Salons de blackjack</h1>
 				</div>
 
 				{avis && <div className="notification is-warning is-light mt-4 mb-8" role="status">

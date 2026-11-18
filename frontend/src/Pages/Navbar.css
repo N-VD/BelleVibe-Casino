@@ -3,3 +3,94 @@
     color: #fff;
     background-color: transparent;
 }
+
+/* ===== Structure générale ===== */
+.navbar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 3.25rem;
+    padding: 0 0.5rem;
+}
+
+.navbar-brand {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.navbar-brand-link {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.navbar-end {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    margin-left: auto;
+    flex: 0 0 auto;
+}
+
+.navbar-end .navbar-item {
+    display: flex;
+    align-items: center;
+    padding: 0 0.25rem;
+}
+
+/* ===== Boutons : plus hauts ===== */
+.navbar-end .button {
+    height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    margin: 0;
+}
+
+/* ===== Tags (solde et connecté) : plus petits ===== */
+.navbar-end .tag {
+    font-size: 0.85rem;
+    height: 1.6rem;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    margin: 0;
+}
+
+/* ===== Tablette / petit écran ===== */
+@media screen and (max-width: 768px) {
+    .navbar-end .button {
+        font-size: 0.75rem;
+        height: 2rem;
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+    }
+
+    .navbar-end .tag {
+        font-size: 0.7rem;
+        height: 1.4rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+}
+
+/* ===== Très petit écran ===== */
+@media screen and (max-width: 480px) {
+    .navbar-end .button {
+        font-size: 0.65rem;
+        height: 1.75rem;
+        padding-left: 0.4rem;
+        padding-right: 0.4rem;
+    }
+
+    .navbar-end .tag {
+        font-size: 0.6rem;
+        height: 1.25rem;
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+    }
+}
