@@ -9,6 +9,7 @@ lerna-debug.log*
 
 tempData
 node_modules
+__pycache__
 dist
 dist-ssr
 *.local
