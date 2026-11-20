@@ -5,6 +5,8 @@ const request = require('supertest');
 
 const salonRouter = require('../Routes/Salon');
 const Salon = require('../models/salon');
+const Compte = require('../models/compte');
+const { jwt, jwt_mdp } = require('../fonctionsCommunes');
 
 // Application Express de test
 const app = express();
@@ -42,26 +44,25 @@ test('POST /addPlayer : valide la présence de salonId et seat_index valide', ()
     assert.equal(Number.isInteger(0) && 0 >= 0, true);
 });
 
-test('PATCH /gameStatus : valide les valeurs de statut permises', () => {
-    const statutsValides = ['waiting', 'playing', 'finished'];
+test('PATCH /gameStatus : refuse un état de partie fourni par le client', async () => {
+    const findByIdOriginal = Compte.findById;
+    Compte.findById = async () => ({ ban_status: false });
+    try {
+        const token = jwt.sign({ id: '507f1f77bcf86cd799439011', role: 'player' }, jwt_mdp);
+        const res = await request(app)
+            .patch('/gameStatus')
+            .set('Authorization', `Bearer ${token}`)
+            .send({
+                salonId: '507f1f77bcf86cd799439012',
+                status: 'finished',
+                players: [],
+            });
 
-    assert.equal(statutsValides.includes('waiting'), true);
-    assert.equal(statutsValides.includes('playing'), true);
-    assert.equal(statutsValides.includes('invalid_status'), false);
-});
-
-test('PATCH /gameStatus : vérifie la logique de synchronisation isTurn', () => {
-    const currentTurnSeat = 2;
-    const players = [
-        { seat_index: 0, isTurn: false },
-        { seat_index: 2, isTurn: true }
-    ];
-
-    const isStateValid = players.every(
-        (player) => player.isTurn === (player.seat_index === currentTurnSeat)
-    );
-
-    assert.equal(isStateValid, true);
+        assert.equal(res.status, 400);
+        assert.match(res.body.message, /salonId valide et action sont obligatoires/);
+    } finally {
+        Compte.findById = findByIdOriginal;
+    }
 });
 
 test('DELETE /deleteSalon : rejette un ID MongoDB invalide', () => {

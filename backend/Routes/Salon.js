@@ -4,8 +4,9 @@ const { authentifier, authentifierOptionnel } = require('../fonctionsCommunes');
 const Salon = require('../models/salon');
 const Compte = require('../models/compte');
 const Transaction = require('../models/transaction');
-const { notifierSalonFerme } = require('../sockets/socketServer');
-const { retourJoueur } = require('../jeux/reglementSalon');
+const { notifierSalonFerme, notifierSalonMisAJour } = require('../sockets/socketServer');
+const { appliquerActionJoueur } = require('../jeux/partieSalon');
+const { tenterReglementManche } = require('../jeux/reglementManche');
 //const { verifierTimeoutEtLimite } = require('./Fontion/timeOut');
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.post('/createSalon', authentifier, async (req, res) => {
             dealer_hand: [],
             deck: [],
             players: [],
-            currentTurnSeat: 0
+            currentTurnSeat: -1
         });
 
         return res.status(201).json({ message: 'Salon créé', salon })
@@ -48,8 +49,8 @@ router.get('/salons', authentifierOptionnel, async (req, res) => {
     try {
         const role = req.user?.role?.toLowerCase();
         const filtre = role === 'dealer' || role === 'admin'
-            ? { status: { $in: ['waiting', 'playing', 'finished'] } }
-            : { status: { $in: ['waiting', 'playing'] } };
+            ? { status: { $in: ['waiting', 'playing', 'settling', 'finished'] } }
+            : { status: { $in: ['waiting', 'playing', 'settling'] } };
         // Un invité n'a pas besoin des id de comptes (savoir s'il est assis, qui a créé le salon)
         const champs = req.user
             ? '_id created_by status players.id_compte players.seat_index created_at'
@@ -127,221 +128,129 @@ router.post('/addPlayer', authentifier, async (req, res) => {
     }
 });
 
-// Route pour update la partie en cours
+// Le client envoie une action; l'état du jeu et les cartes restent sous le contrôle du serveur.
 router.patch('/gameStatus', authentifier, async (req, res) => {
-    const { salonId, status, dealer_hand, players, currentTurnSeat } = req.body;
-    const role = req.user?.role?.toLowerCase();
-
-    // C'est le dealer qui lance le update ce fera probablement avec des signe de main
-    //if (role !== 'dealer' && role !== 'admin') {
-    //    return res.status(403).json({ message: "Accès refusé. Seul un dealer peut mettre à jour la partie." });
-    //}
-
-    const hasStatus = status !== undefined;
-    const hasDealerHand = dealer_hand !== undefined;
-    const hasPlayers = players !== undefined;
-    const hasCurrentTurnSeat = currentTurnSeat !== undefined;
-
-
-
-    // Juste une de des variables plus haut a besoin d'être changer
-    if (!salonId ||!mongoose.isValidObjectId(salonId) || (!hasStatus && !hasDealerHand && !hasPlayers && !hasCurrentTurnSeat)
-        || (hasStatus && !['waiting', 'playing', 'finished'].includes(status))
-        || (hasDealerHand && !Array.isArray(dealer_hand))
-        || (hasPlayers && !Array.isArray(players))
-        || (hasCurrentTurnSeat && (!Number.isInteger(currentTurnSeat) || currentTurnSeat < 0))) {
-        return res.status(400).json({
-            message: 'salonId et au moins un champ de partie valide sont obligatoires.'
-        });
+    const body = req.body ?? {};
+    const { salonId, action } = body;
+    if (!salonId || !mongoose.isValidObjectId(salonId)
+        || Object.keys(body).some((cle) => !['salonId', 'action'].includes(cle))) {
+        return res.status(400).json({ message: 'salonId valide et action sont obligatoires.' });
+    }
+    if (req.user?.role?.toLowerCase() !== 'player') {
+        return res.status(403).json({ message: 'Seul un joueur peut agir sur sa main.' });
     }
 
+    let mouvement = null;
     try {
         const salon = await Salon.findById(salonId);
+        if (!salon) return res.status(404).json({ message: 'Salon non trouvé.' });
+        const compte = await Compte.findById(req.user.id).select('montant');
+        if (!compte) return res.status(404).json({ message: 'Compte introuvable.' });
 
-        if (!salon) {
-            return res.status(404).json({ message: 'Salon non trouvé.' });
-        }
+        const { coutSupplementaire, player } = appliquerActionJoueur(
+            salon,
+            req.user.id,
+            action,
+            compte.montant,
+        );
 
-        if (role !== 'dealer' && role !== 'admin' && !estJoueurDuSalon(salon, req.user.id)) {
-            return res.status(403).json({ message: "Accès refusé. Vous n'êtes pas joueur de ce salon." });
-        }
-
-        // Vérifie que les joueurs a la variable isTurn = true si le currentTurnSeat est le seat du joueurs 
-        const nextPlayers = hasPlayers ? players : salon.players;
-        const nextCurrentTurnSeat = hasCurrentTurnSeat
-            ? currentTurnSeat
-            : salon.currentTurnSeat;
-        const siegesVus = new Set();
-        const comptesVus = new Set();
-        const joueursValides = nextPlayers.every((player) => {
-            if (!player || !Number.isInteger(player.seat_index) || player.seat_index < 0
-                || !player.id_compte || siegesVus.has(player.seat_index)
-                || comptesVus.has(player.id_compte.toString())) {
-                return false;
-            }
-            siegesVus.add(player.seat_index);
-            comptesVus.add(player.id_compte.toString());
-            const joueurEnregistre = salon.players.find((joueur) => joueur.seat_index === player.seat_index);
-            return joueurEnregistre?.id_compte?.toString() === player.id_compte.toString();
-        });
-
-        if (!joueursValides) {
-            return res.status(400).json({
-                message: 'Chaque joueur doit conserver son compte et son siège, sans siège dupliqué.'
-            });
-        }
-
-        const hasValidTurnState = nextPlayers.every((player) => (
-            player.isTurn === (player.seat_index === nextCurrentTurnSeat)
-        ));
-
-        if (!hasValidTurnState) {
-            return res.status(400).json({
-                message: 'isTurn doit être vrai uniquement pour le joueur dont seat_index correspond à currentTurnSeat.'
-            });
-        }
-
-        const mouvementsCompte = [];
-        let salonMisAJour;
-        try {
-            const demarrePartie = salon.status === 'waiting'
-                && (status === 'playing' || status === 'finished')
-                && salon.players.some((player) => Number(player.bet) > 0);
-            const terminePartie = status === 'finished'
-                && (salon.status === 'playing' || demarrePartie);
-            const mainCroupier = hasDealerHand ? dealer_hand : salon.dealer_hand;
-
-            async function appliquerMouvement(idCompte, montant, desc, debit = false) {
-                const filtre = { _id: idCompte };
-                if (debit) filtre.montant = { $gte: montant };
-                const compte = await Compte.findOneAndUpdate(
-                    filtre,
-                    { $inc: { montant: debit ? -montant : montant } },
-                    { new: true }
-                );
-                if (!compte) {
-                    const erreur = new Error(debit ? 'Solde insuffisant pour cette mise.' : 'Compte introuvable pour le règlement.');
-                    erreur.code = debit ? 'INSUFFICIENT_FUNDS' : 'ACCOUNT_NOT_FOUND';
-                    throw erreur;
-                }
-
-                const entree = { id_compte: idCompte, montant: debit ? -montant : montant, transactionId: null };
-                mouvementsCompte.push(entree);
-                const transaction = await Transaction.create({
-                    id_compte: idCompte,
-                    desc,
-                    montant: entree.montant
-                });
-                entree.transactionId = transaction._id;
-            }
-
-            if (demarrePartie) {
-                for (const player of salon.players) {
-                    const mise = Math.round(Number(player.bet) * 100) / 100;
-                    if (!Number.isFinite(mise) || mise <= 0) continue;
-                    
-                    //ajout de la vérification de la limite de perte avant d'appliquer le mouvement
-                    const compteJoueur = await Compte.findById(player.id_compte);
-                    if (compteJoueur && compteJoueur.limit_perte !== null) {
-            
-                        if (compteJoueur.montant < compteJoueur.limit_perte) {
-                            compteJoueur.ban_status = true;
-                            // Optionnel : définir une expiration (ex: 5h ou permanent)
-                            compteJoueur.ban_expires_at = new Date(Date.now() + 60 * 1000);
-                            await compteJoueur.save();
-                            
-                            const erreur = new Error("Vous avez atteint votre limite de perte fixée. Votre compte a été suspendu par mesure de jeu responsable.");
-                            erreur.code = 'USER_BANNED';
-                            throw erreur;
-                        }
-                    }
-                    await appliquerMouvement(player.id_compte, mise, 'Mise blackjack en salon', true);
-                }
-            }
-
-            if (salon.status === 'playing' && hasPlayers) {
-                for (const player of nextPlayers) {
-                    const ancienJoueur = salon.players.find((ancien) => ancien.seat_index === player.seat_index);
-                    if (ancienJoueur?.id_compte?.toString() !== player.id_compte?.toString()) continue;
-                    const anciennesMains = Array.isArray(ancienJoueur.hands) ? ancienJoueur.hands : [];
-                    const nouvellesMains = Array.isArray(player.hands) ? player.hands : [];
-                    if (nouvellesMains.length > anciennesMains.length) {
-                        const miseAncienne = anciennesMains.reduce((total, main) => total + Number(main.mise || 0), 0);
-                        const miseNouvelle = nouvellesMains.reduce((total, main) => total + Number(main.mise || 0), 0);
-                        const coutSupplementaire = Math.round((miseNouvelle - miseAncienne) * 100) / 100;
-                        if (coutSupplementaire > 0) {
-                            await appliquerMouvement(player.id_compte, coutSupplementaire, 'Mise split blackjack en salon', true);
-                        }
-                    }
-                }
-            }
-
-            if (terminePartie && hasPlayers) {
-                for (const player of nextPlayers) {
-                    const ancienJoueur = salon.players.find((ancien) => ancien.seat_index === player.seat_index);
-                    if (ancienJoueur?.id_compte?.toString() !== player.id_compte?.toString()
-                        || ancienJoueur.status === 'finished' || player.status !== 'finished') continue;
-
-                    const retour = retourJoueur(player, mainCroupier);
-                    if (retour > 0) {
-                        await appliquerMouvement(ancienJoueur.id_compte, retour, 'Retour et gain blackjack en salon');
-                    }
-                }
-            }
-            const updateData = {
-                updated_at: new Date()
-            };
-
-            if (hasDealerHand) updateData.dealer_hand = dealer_hand;
-            if (hasStatus) updateData.status = status;
-            if (hasPlayers) updateData.players = [...players].sort((a, b) => a.seat_index - b.seat_index);
-            if (hasCurrentTurnSeat) updateData.currentTurnSeat = currentTurnSeat;
-
-            // 2. On applique la mise à jour atomique en base de données
-            salonMisAJour = await Salon.findByIdAndUpdate(
-                salon._id || salon.id,
-                updateData,
-                { new: true, runValidators: true }
+        let soldeApresAction = compte.montant;
+        if (coutSupplementaire > 0) {
+            const compteDebite = await Compte.findOneAndUpdate(
+                { _id: req.user.id, montant: { $gte: coutSupplementaire } },
+                { $inc: { montant: -coutSupplementaire } },
+                { new: true },
             );
-            if (!salonMisAJour) {
-                throw new Error('Le salon n’a pas pu être rechargé après sa mise à jour.');
-            }
-
-        } catch (error) {
-            for (const entree of mouvementsCompte.reverse()) {
-                await Compte.findByIdAndUpdate(entree.id_compte, { $inc: { montant: -entree.montant } });
-                if (entree.transactionId) await Transaction.findByIdAndDelete(entree.transactionId);
-            }
-            if (error.code === 'INSUFFICIENT_FUNDS' || error.code === 'ACCOUNT_NOT_FOUND') {
-                return res.status(400).json({ message: error.message });
-            }
-            if (error.code === 'USER_BANNED') {
-                const compteBanni = await Compte.findById(req.user.id);
-                return res.status(403).json({ message: error.message, ban_expires_at: compteBanni?.ban_expires_at });
-            }
-            throw error;
+            if (!compteDebite) return res.status(400).json({ message: 'Solde insuffisant pour doubler.' });
+            soldeApresAction = compteDebite.montant;
+            mouvement = { id_compte: req.user.id, montant: coutSupplementaire, transactionId: null };
+            const transaction = await Transaction.create({
+                id_compte: req.user.id,
+                desc: 'Double blackjack en salon',
+                montant: -coutSupplementaire,
+            });
+            mouvement.transactionId = transaction._id;
         }
 
-        const compteActuel = await Compte.findById(req.user.id).select('montant');
+        const dateMiseAJour = new Date(Math.max(Date.now(), new Date(salon.updated_at).getTime() + 1));
+        const salonMisAJour = await Salon.findOneAndUpdate(
+            {
+                _id: salonId,
+                status: 'playing',
+                currentTurnSeat: player.seat_index,
+                updated_at: salon.updated_at,
+                players: {
+                    $elemMatch: {
+                        id_compte: req.user.id,
+                        seat_index: player.seat_index,
+                        status: 'playing',
+                        isTurn: true,
+                        pendingAction: null,
+                    },
+                },
+            },
+            {
+                $set: {
+                    players: salon.players,
+                    currentTurnSeat: salon.currentTurnSeat,
+                    updated_at: dateMiseAJour,
+                },
+            },
+            { new: true, runValidators: true },
+        );
+        if (!salonMisAJour) {
+            throw Object.assign(new Error('La table a changé; rechargez son état avant de réessayer.'), { status: 409 });
+        }
 
-        // Utilise salonMisAJour s'il existe, sinon retombe sur l'objet salon initial
-        const salonFinal = salonMisAJour || salon;
+        mouvement = null;
+        try {
+            await notifierSalonMisAJour(salonMisAJour);
+        } catch (erreurDiffusion) {
+            console.error('Échec de diffusion de l’action blackjack :', erreurDiffusion);
+        }
+        try {
+            await tenterReglementManche(salonId, notifierSalonMisAJour);
+        } catch (erreurReglement) {
+            console.error('Échec du règlement après action blackjack :', erreurReglement);
+        }
 
+        let salonFinal = salonMisAJour;
+        let soldeFinal = soldeApresAction;
+        try {
+            const [salonRecharge, compteRecharge] = await Promise.all([
+                Salon.findById(salonId),
+                Compte.findById(req.user.id).select('montant'),
+            ]);
+            if (salonRecharge) salonFinal = salonRecharge;
+            if (compteRecharge) soldeFinal = compteRecharge.montant;
+        } catch (erreurRechargement) {
+            console.error('Échec du rechargement de l’état après action blackjack :', erreurRechargement);
+        }
         return res.status(200).json({
-            message: 'État de la partie mis à jour.',
-            solde: compteActuel?.montant ?? null,
-            gameStatus: {
+            ok: true,
+            solde: soldeFinal,
+            gameStatus: salonFinal ? {
                 status: salonFinal.status,
                 dealer_hand: salonFinal.dealer_hand,
                 players: [...salonFinal.players].sort((a, b) => a.seat_index - b.seat_index),
-                currentTurnSeat: salonFinal.currentTurnSeat
-            }
+                currentTurnSeat: salonFinal.currentTurnSeat,
+            } : null,
         });
     } catch (error) {
-        console.error("ERREUR ROUTE GAMESTATUS :", error);
-        return res.status(500).json({ message: "Erreur lors de la mise à jour de la partie." });
+        if (mouvement) {
+            try {
+                await Compte.findByIdAndUpdate(mouvement.id_compte, {
+                    $inc: { montant: mouvement.montant },
+                });
+                if (mouvement.transactionId) await Transaction.findByIdAndDelete(mouvement.transactionId);
+            } catch (erreurAnnulation) {
+                console.error('Échec de l’annulation du débit du double :', erreurAnnulation);
+            }
+        }
+        if (error.status) return res.status(error.status).json({ message: error.message });
+        console.error('ERREUR ROUTE GAMESTATUS :', error);
+        return res.status(500).json({ message: 'Erreur lors de l’action blackjack.' });
     }
-
 });
 
 router.delete('/deleteSalon', authentifier, async (req, res) => {
@@ -370,15 +279,16 @@ router.delete('/deleteSalon', authentifier, async (req, res) => {
             return res.status(403).json({ message: 'Vous ne pouvez fermer que les salons que vous avez créés.' });
         }
 
-        // Vérifie le salon est en status finished pour le supprimer
-        if (salon.status === 'playing') {
+        const salonSupprime = await Salon.findOneAndDelete({
+            _id: salonId,
+            status: { $nin: ['playing', 'settling'] },
+        });
+        if (!salonSupprime) {
             return res.status(409).json({ message: 'Le salon ne peut pas être fermé pendant une partie.' });
         }
-
-        await Salon.findByIdAndDelete(salonId);
         notifierSalonFerme(salonId); // les connexions encore à la table sont renvoyées au lobby
 
-        return res.status(200).json({ message: 'Salon supprimé.', salon });
+        return res.status(200).json({ message: 'Salon supprimé.', salon: salonSupprime });
     } catch (error) {
         console.error('ERREUR ROUTE DELETESALON :', error);
         return res.status(500).json({ message: 'Erreur lors de la suppression du salon.' });
