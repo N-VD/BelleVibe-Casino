@@ -18,6 +18,159 @@
 	gap: 0.5rem;
 }
 
+.bj-partie {
+	width: 100%;
+	margin-top: 1.5rem;
+	padding: 1rem;
+	border: 1px solid rgba(255, 255, 255, 0.24);
+	border-radius: 12px;
+	background: rgba(0, 0, 0, 0.16);
+	color: #fff;
+}
+
+.bj-live-layout {
+	display: grid;
+	grid-template-columns: minmax(210px, 0.8fr) minmax(0, 2fr);
+	align-items: start;
+	gap: 1rem;
+	width: 100%;
+}
+
+.bj-live-state,
+.bj-camera-zone {
+	min-width: 0;
+}
+
+.bj-partie.is-compact {
+	max-height: calc(100vh - 12rem);
+	margin-top: 0;
+	padding: 0.7rem;
+	overflow-y: auto;
+}
+
+.bj-partie.is-compact .bj-partie-entete {
+	gap: 0.4rem;
+}
+
+.bj-partie.is-compact .bj-partie-entete .title {
+	font-size: 1.1rem;
+}
+
+.bj-partie.is-compact .bj-partie-entete .tag {
+	font-size: 0.75rem;
+}
+
+.bj-partie.is-compact .bj-main-live {
+	margin-top: 0.55rem;
+	padding: 0.55rem;
+	border-width: 1px;
+}
+
+.bj-partie.is-compact .bj-main-live .title {
+	font-size: 0.95rem;
+}
+
+.bj-partie.is-compact .bj-main-live p {
+	margin-bottom: 0.2rem;
+	font-size: 0.82rem;
+}
+
+.bj-partie.is-compact .bj-main-live-cartes {
+	margin-top: 0.4rem;
+}
+
+.bj-partie.is-compact .bj-cartes-detectees {
+	gap: 0.3rem;
+	min-height: 2rem;
+	margin: 0.3rem 0;
+}
+
+.bj-partie.is-compact .bj-carte-detectee {
+	min-width: 2rem;
+	min-height: 2.2rem;
+	padding: 0.2rem 0.35rem;
+	font-size: 0.95rem;
+}
+
+.bj-camera-zone {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.bj-camera-zone .bj-camera {
+	max-width: none;
+}
+
+.bj-partie .title {
+	color: #fff;
+}
+
+.bj-partie-entete,
+.bj-main-live-entete {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+}
+
+.bj-partie-entete .title,
+.bj-main-live-entete .title {
+	margin-bottom: 0;
+}
+
+.bj-main-live {
+	margin-top: 1rem;
+	padding: 0.9rem;
+	border: 2px solid rgba(255, 255, 255, 0.18);
+	border-radius: 10px;
+	background: rgba(0, 0, 0, 0.13);
+}
+
+.bj-main-live.is-active {
+	border-color: #ffdd57;
+	box-shadow: 0 0 0 2px rgba(255, 221, 87, 0.14);
+}
+
+.bj-main-croupier {
+	border-color: rgba(255, 221, 87, 0.45);
+}
+
+.bj-main-live-cartes {
+	margin-top: 0.75rem;
+}
+
+.bj-cartes-detectees {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	min-height: 2.6rem;
+	margin: 0.5rem 0;
+}
+
+.bj-carte-detectee {
+	display: inline-flex;
+	min-width: 2.5rem;
+	min-height: 2.8rem;
+	align-items: center;
+	justify-content: center;
+	padding: 0.3rem 0.5rem;
+	border: 1px solid #d8d8d8;
+	border-radius: 6px;
+	background: #fff;
+	color: #222;
+	font-size: 1.15rem;
+	font-weight: 700;
+	box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+}
+
+.bj-cartes-attente {
+	color: rgba(255, 255, 255, 0.72);
+	font-style: italic;
+}
+
 .bj-mains {
 	display: flex;
 	flex-wrap: wrap;
@@ -395,9 +548,7 @@
 
 .bj-joueurs-cartes {
 	flex: 1;
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-	gap: 1rem;
+	min-width: 0;
 }
 
 .bj-joueur-card {
@@ -418,4 +569,30 @@
 
 .bj-section-croupier {
 	padding: 1rem 0.5rem 0;
+}
+
+@media (max-width: 1215px) {
+	.bj-camera-columns {
+		flex-direction: column;
+	}
+
+	.bj-camera-chat-column {
+		width: 100%;
+		flex: none;
+	}
+
+	.bj-camera-chat-column .chat {
+		max-width: 720px;
+		margin: 0 auto;
+	}
+}
+
+@media (max-width: 760px) {
+	.bj-live-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.bj-partie.is-compact {
+		max-height: none;
+	}
 }

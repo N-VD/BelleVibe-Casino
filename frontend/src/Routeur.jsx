@@ -6,7 +6,6 @@ import Compte from "./Pages/Compte.jsx";
 import Navbar from "./Pages/Navbar.jsx";
 import AuthPopup from "./Pages/AuthPopup.jsx";
 import Salon from "./Pages/Salon.jsx";
-import Blackjack from "./Pages/Blackjack.jsx";
 import BlackjackCamera from "./Pages/Blackjack_Camera.jsx";
 import GithubCallback from "./Pages/GithubCallback.jsx";
 import { API_URL } from "./Pages/reglesBlackjack/constantes.js";
@@ -111,7 +110,7 @@ function Routeur() {
 				/>
 				<Route
 					path="/jeux/blackjack"
-					element={isLoggedIn ? <Blackjack isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} /> : <Navigate to="/login" replace />}
+					element={<Navigate to="/" replace />}
 				/>
 				<Route
 					path="/jeux/blackjack-camera/:id"
