@@ -1,37 +1,21 @@
-const crypto = require('crypto');
-
-// Logique pure du blackjack (aucun accès à la base de données)
-//t
-const RANGS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-const COULEURS = ['pique', 'coeur', 'carreau', 'trefle'];
-const NB_PAQUETS = 6;
-const NB_MAINS_MAX = 4;
+const RANGS = new Set(['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']);
 const CROUPIER_RESTE_A = 17;
 
-function creerSabot() {
-    const sabot = [];
-    for (let p = 0; p < NB_PAQUETS; p++) {
-        for (const couleur of COULEURS) {
-            for (const rang of RANGS) {
-                sabot.push({ rang, couleur });
-            }
-        }
+/** Refuse les cartes sans rang reconnu pour empêcher un calcul sur une détection invalide. */
+function validerCartes(cartes, nom) {
+    if (!Array.isArray(cartes) || cartes.some((carte) => !carte || !RANGS.has(carte.rang))) {
+        throw new TypeError(`${nom} doit contenir des cartes avec un rang valide.`);
     }
-    // Mélange de Fisher-Yates avec un générateur cryptographique
-    for (let i = sabot.length - 1; i > 0; i--) {
-        const j = crypto.randomInt(i + 1);
-        [sabot[i], sabot[j]] = [sabot[j], sabot[i]];
-    }
-    return sabot;
 }
 
+/** Retourne la valeur blackjack d'un rang reconnu. */
 function valeurCarte(rang) {
     if (rang === 'A') return 11;
     if (['J', 'Q', 'K'].includes(rang)) return 10;
     return Number(rang);
 }
 
-// Les as valent 11, puis 1 tant que la main dépasse 21
+/** Calcule le total maximal inférieur ou égal à 21, en réduisant les as de 11 à 1 au besoin. */
 function valeurMain(cartes) {
     let total = 0;
     let as = 0;
@@ -46,160 +30,156 @@ function valeurMain(cartes) {
     return total;
 }
 
+/** Identifie un 21 naturel obtenu avec exactement les deux cartes initiales. */
 function estBlackjackNaturel(cartes) {
     return cartes.length === 2 && valeurMain(cartes) === 21;
 }
 
+/** Arrondit les montants à deux décimales pour les calculs monétaires. */
 function arrondir(montant) {
     return Math.round(montant * 100) / 100;
 }
 
-function nouvelleMain(cartes, mise, issueDuSplit = false) {
-    return { cartes, mise, statut: 'en_cours', issueDuSplit, double: false, resultat: null, gain: 0 };
-}
+/**
+ * Crée une partie à partir des cartes initiales détectées.
+ * La caméra peut ne fournir que la carte visible du croupier avant la révélation.
+ */
+function creerPartie({ mise, cartesJoueur, cartesCroupier }) {
+    validerCartes(cartesJoueur, 'cartesJoueur');
+    validerCartes(cartesCroupier, 'cartesCroupier');
+    // Une main de joueur commence à deux cartes; le croupier peut n'en exposer qu'une avant la révélation.
+    if (cartesJoueur.length !== 2 || cartesCroupier.length < 1 || cartesCroupier.length > 2) {
+        throw new RangeError('La main initiale doit avoir deux cartes et celle du croupier une ou deux.');
+    }
+    // Refuse une mise non finie ou qui deviendrait nulle après l'arrondi monétaire.
+    if (!Number.isFinite(mise) || arrondir(mise) <= 0) {
+        throw new RangeError('La mise doit être un nombre supérieur à zéro.');
+    }
 
-function distribuer(mise) {
-    const sabot = creerSabot();
-    const main = nouvelleMain([], mise);
-    const croupier = [];
-    main.cartes.push(sabot.pop());
-    croupier.push(sabot.pop());
-    main.cartes.push(sabot.pop());
-    croupier.push(sabot.pop());
+    const main = {
+        cartes: [...cartesJoueur],
+        mise: arrondir(mise),
+        statut: estBlackjackNaturel(cartesJoueur) ? 'blackjack' : 'en_cours',
+        double: false,
+        resultat: null,
+        gain: 0,
+    };
+    const partie = {
+        statut: 'en_cours',
+        croupier: [...cartesCroupier],
+        mains: [main],
+        mainActive: 0,
+    };
 
-    const partie = { statut: 'en_cours', sabot, croupier, mains: [main], mainActive: 0 };
-
-    // Un blackjack naturel (joueur ou croupier) termine la main immédiatement
-    const joueurBJ = estBlackjackNaturel(main.cartes);
-    if (joueurBJ || estBlackjackNaturel(croupier)) {
-        main.statut = joueurBJ ? 'blackjack' : 'stand';
-        terminer(partie);
+    if (main.statut === 'blackjack' || estBlackjackNaturel(partie.croupier)) {
+        partie.statut = 'attente_croupier';
     }
     return partie;
 }
 
+/** Retourne les actions permises pour la main active et le solde disponible. */
 function actionsPossibles(partie, solde) {
     if (partie.statut !== 'en_cours') return [];
     const main = partie.mains[partie.mainActive];
+    if (!main || main.statut !== 'en_cours') return [];
+
     const actions = ['hit', 'stand'];
-    const deuxCartes = main.cartes.length === 2;
-    if (deuxCartes && solde >= main.mise) {
+    // Le double exige deux cartes initiales et assez de solde pour égaler la mise courante.
+    if (main.cartes.length === 2 && Number.isFinite(solde) && solde >= main.mise) {
         actions.push('double');
-        const memeValeur = valeurCarte(main.cartes[0].rang) === valeurCarte(main.cartes[1].rang);
-        if (memeValeur && partie.mains.length < NB_MAINS_MAX) actions.push('split');
     }
     return actions;
 }
 
-// Applique une action sur la main active. Le débit du solde (double/split) est géré par l'appelant.
-function jouer(partie, action) {
+/**
+ * Applique une action à la main active. Pour hit/double, carte vient de la détection caméra;
+ * le solde est fourni par l'appelant pour autoriser ou refuser le double.
+ */
+function jouer(partie, action, { carte, solde = 0 } = {}) {
+    // Valide aussi le tour et le financement du double avant de modifier la partie.
+    if (!actionsPossibles(partie, solde).includes(action)) {
+        throw new Error(`Action impossible : ${action}`);
+    }
+
     const main = partie.mains[partie.mainActive];
-
-    switch (action) {
-        case 'hit':
-            main.cartes.push(partie.sabot.pop());
-            break;
-        case 'stand':
-            main.statut = 'stand';
-            break;
-        case 'double':
-            main.mise = arrondir(main.mise * 2);
-            main.double = true;
-            main.cartes.push(partie.sabot.pop());
-            main.statut = valeurMain(main.cartes) > 21 ? 'bust' : 'stand';
-            break;
-        case 'split': {
-            const [premiere, seconde] = main.cartes;
-            const autre = nouvelleMain([seconde, partie.sabot.pop()], main.mise, true);
-            main.cartes = [premiere, partie.sabot.pop()];
-            main.issueDuSplit = true;
-            // Des as séparés ne reçoivent qu'une seule carte chacun
-            if (premiere.rang === 'A') {
-                main.statut = 'stand';
-                autre.statut = 'stand';
-            }
-            partie.mains.splice(partie.mainActive + 1, 0, autre);
-            break;
-        }
-        default:
-            throw new Error(`Action inconnue : ${action}`);
+    if (action === 'stand') {
+        main.statut = 'stand';
+        partie.statut = 'attente_croupier';
+        return partie;
     }
-    avancer(partie);
+
+    validerCartes([carte], 'carte');
+    main.cartes.push(carte);
+    if (action === 'double') {
+        main.mise = arrondir(main.mise * 2);
+        main.double = true;
+        main.statut = valeurMain(main.cartes) > 21 ? 'bust' : 'stand';
+        partie.statut = 'attente_croupier';
+    } else if (valeurMain(main.cartes) > 21) {
+        main.statut = 'bust';
+        partie.statut = 'attente_croupier';
+    } else if (valeurMain(main.cartes) === 21) {
+        main.statut = 'stand';
+        partie.statut = 'attente_croupier';
+    }
+    return partie;
 }
 
-// Passe à la prochaine main jouable; si aucune, le croupier joue
-function avancer(partie) {
-    while (partie.mainActive < partie.mains.length) {
-        const main = partie.mains[partie.mainActive];
-        if (main.statut === 'en_cours') {
-            const total = valeurMain(main.cartes);
-            if (total > 21) main.statut = 'bust';
-            else if (total === 21) main.statut = 'stand';
-            else return;
-        }
-        partie.mainActive++;
+/**
+ * Règle la main avec les cartes finales du croupier observées par la caméra.
+ * Un joueur bust n'a pas besoin d'attendre que le croupier tire jusqu'à 17.
+ */
+function terminer(partie, cartesCroupier = partie.croupier) {
+    if (partie.statut !== 'attente_croupier') {
+        throw new Error('La partie ne peut pas être réglée avant la fin du tour du joueur.');
     }
-    terminer(partie);
-}
-
-function terminer(partie) {
-    // Le croupier ne tire que si au moins une main attend la comparaison
-    if (partie.mains.some((main) => main.statut === 'stand')) {
-        while (valeurMain(partie.croupier) < CROUPIER_RESTE_A) {
-            partie.croupier.push(partie.sabot.pop());
-        }
+    validerCartes(cartesCroupier, 'cartesCroupier');
+    const main = partie.mains[0];
+    const joueurNaturel = main.statut === 'blackjack';
+    const joueurBust = main.statut === 'bust';
+    // Il faut révéler la deuxième carte, sauf si le joueur a déjà dépassé 21.
+    if (cartesCroupier.length < 2 && !joueurBust) {
+        throw new RangeError('La main finale du croupier doit contenir au moins deux cartes.');
+    }
+    const totalCroupier = valeurMain(cartesCroupier);
+    // Un blackjack naturel se compare à la main initiale du croupier; les autres mains attendent 17.
+    if (!joueurNaturel && !joueurBust && totalCroupier < CROUPIER_RESTE_A) {
+        throw new Error('Le croupier doit tirer jusqu’à 17 avant le règlement.');
     }
 
-    const totalCroupier = valeurMain(partie.croupier);
-    const croupierBJ = estBlackjackNaturel(partie.croupier);
+    partie.croupier = [...cartesCroupier];
+    const totalJoueur = valeurMain(main.cartes);
+    const blackjackCroupier = estBlackjackNaturel(partie.croupier);
 
-    for (const main of partie.mains) {
-        const total = valeurMain(main.cartes);
-        let resultat;
-        let gain;
-        if (main.statut === 'bust') {
-            resultat = 'perdu'; gain = 0;
-        } else if (main.statut === 'blackjack') {
-            if (croupierBJ) { resultat = 'egalite'; gain = main.mise; }
-            else { resultat = 'blackjack'; gain = main.mise * 2.5; } // paie 3:2
-        } else if (croupierBJ) {
-            resultat = 'perdu'; gain = 0;
-        } else if (totalCroupier > 21 || total > totalCroupier) {
-            resultat = 'gagne'; gain = main.mise * 2;
-        } else if (total === totalCroupier) {
-            resultat = 'egalite'; gain = main.mise;
-        } else {
-            resultat = 'perdu'; gain = 0;
-        }
-        main.resultat = resultat;
-        main.gain = arrondir(gain);
+    if (main.statut === 'bust' || (blackjackCroupier && !joueurNaturel)) {
+        main.resultat = 'perdu';
+        main.gain = 0;
+    } else if (joueurNaturel && blackjackCroupier) {
+        main.resultat = 'egalite';
+        main.gain = main.mise;
+    } else if (joueurNaturel) {
+        main.resultat = 'blackjack';
+        main.gain = arrondir(main.mise * 2.5);
+    } else if (totalCroupier > 21 || totalJoueur > totalCroupier) {
+        main.resultat = 'gagne';
+        main.gain = arrondir(main.mise * 2);
+    } else if (totalJoueur === totalCroupier) {
+        main.resultat = 'egalite';
+        main.gain = main.mise;
+    } else {
+        main.resultat = 'perdu';
+        main.gain = 0;
     }
+
     partie.statut = 'terminee';
+    return partie;
 }
 
-// Ce que le client a le droit de voir : pas de sabot, carte cachée du croupier pendant la main
-function vuePartie(partie, solde) {
-    const enCours = partie.statut === 'en_cours';
-    const croupier = enCours ? [partie.croupier[0], { cachee: true }] : partie.croupier;
-    return {
-        statut: partie.statut,
-        croupier: {
-            cartes: croupier,
-            total: valeurMain(enCours ? [partie.croupier[0]] : partie.croupier),
-            blackjack: !enCours && estBlackjackNaturel(partie.croupier),
-        },
-        mains: partie.mains.map((main) => ({
-            cartes: main.cartes,
-            total: valeurMain(main.cartes),
-            mise: main.mise,
-            statut: main.statut,
-            double: main.double,
-            resultat: main.resultat,
-            gain: main.gain,
-        })),
-        mainActive: enCours ? partie.mainActive : null,
-        actions: actionsPossibles(partie, solde),
-    };
-}
-
-module.exports = { distribuer, jouer, actionsPossibles, vuePartie, valeurMain, arrondir };
+module.exports = {
+    creerPartie,
+    jouer,
+    terminer,
+    actionsPossibles,
+    valeurMain,
+    arrondir,
+};

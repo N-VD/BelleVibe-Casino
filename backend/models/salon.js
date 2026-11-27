@@ -8,17 +8,18 @@ const playerInSalonSchema = new mongoose.Schema({
   resultats: { type: Array, default: [] },
   activeHand: { type: Number, default: 0 },
   bet: { type: Number, default: 0 },
-  status: { type: String, default: 'waiting' }, // waiting, finished
+  status: { type: String, default: 'waiting' }, // waiting, playing, stand, bust, blackjack, finished
+  pendingAction: { type: String, default: null },
   isTurn: { type: Boolean, default: false }
 }, { _id: false });
 
 const salonSchema = new mongoose.Schema({
   created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'Compte', required: false },
-  status: { type: String, default: 'waiting' }, // waiting, playing, finished
+  status: { type: String, default: 'waiting' }, // waiting, playing, settling, finished
   dealer_hand: { type: Array, default: [] },
   deck: { type: Array, default: [] },
   players: [playerInSalonSchema], // Tableau de joueurs à la table
-  currentTurnSeat: { type: Number, default: 0 },
+  currentTurnSeat: { type: Number, default: -1 },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now }
 });

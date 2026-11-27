@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { connecterSocket } from "../services/socket.js";
+import { notifierSoldeMisAJour } from "../services/solde.js";
 import "./Blackjack.css";
 import Chat from "./Chat.jsx";
-import { lireUtilisateur } from "./reglesBlackjack/outils.js";
+import { API_URL, lireUtilisateur, totalMain } from "./reglesBlackjack/outils.js";
 
 const FPS_ENVOI = 10;
 const QUALITE_JPEG = 0.7;
@@ -106,6 +107,119 @@ function useImagesRecues(actif, socket) {
 	return { image, enDirect };
 }
 
+function texteStatutManche(statut) {
+	return ({
+		waiting: "En attente des mises et des cartes initiales",
+		playing: "Manche en cours",
+		settling: "Règlement en cours",
+		finished: "Manche terminée",
+	})[statut] ?? "État de la manche indisponible";
+}
+
+function texteStatutJoueur(statut) {
+	return ({
+		waiting: "En attente des cartes",
+		playing: "En jeu",
+		stand: "Reste",
+		bust: "Dépassé 21",
+		blackjack: "Blackjack naturel",
+		finished: "Manche réglée",
+	})[statut] ?? "En attente";
+}
+
+function texteResultat(resultat) {
+	return ({
+		gagne: "Gagné",
+		perdu: "Perdu",
+		egalite: "Égalité",
+		blackjack: "Blackjack",
+	})[resultat] ?? null;
+}
+
+function CartesDetectees({ cartes }) {
+	if (!cartes?.length) return <p className="bj-cartes-attente">En attente des cartes détectées...</p>;
+
+	return (
+		<div className="bj-cartes-detectees" aria-label="Cartes détectées">
+			{cartes.map((carte, index) => (
+				<span className="bj-carte-detectee" key={`${index}-${carte.rang}`}>
+					{carte.rang}
+				</span>
+			))}
+		</div>
+	);
+}
+
+function TableauPartie({ salon, idCompte, compact = false }) {
+	const joueurs = [...(salon?.players ?? [])].sort((a, b) => a.seat_index - b.seat_index);
+
+	return (
+		<section className={`bj-partie ${compact ? "is-compact" : ""}`} aria-label="État de la manche">
+			<div className="bj-partie-entete">
+				<h2 className={`title ${compact ? "is-5" : "is-4"}`}>État de la manche</h2>
+				<span className={`tag is-medium ${salon?.status === "playing" ? "is-success" : "is-info"}`}>
+					{texteStatutManche(salon?.status)}
+				</span>
+			</div>
+
+			<article className="bj-main-live bj-main-croupier">
+				<h3 className="title is-5">Croupier</h3>
+				<CartesDetectees cartes={salon?.dealer_hand} />
+				<p>Total détecté : {totalMain(salon?.dealer_hand)}</p>
+			</article>
+
+			<div className="bj-joueurs-live">
+				{joueurs.map((joueur) => {
+					const estMoi = idCompte != null && String(joueur.id_compte) === String(idCompte);
+					const estActif = salon?.status === "playing" && joueur.isTurn;
+					const mains = Array.isArray(joueur.hands) ? joueur.hands : [];
+
+					return (
+						<article
+							className={`bj-main-live ${estActif ? "is-active" : ""}`}
+							key={joueur.seat_index}
+							aria-label={`Joueur au siège ${joueur.seat_index + 1}`}
+						>
+							<div className="bj-main-live-entete">
+								<h3 className="title is-5">
+									Siège {joueur.seat_index + 1}{estMoi ? " · Vous" : ""}
+								</h3>
+								{estActif && <span className="tag is-warning">À vous de jouer</span>}
+							</div>
+							<p>{texteStatutJoueur(joueur.status)}</p>
+							<p>Mise : {Number(joueur.bet ?? 0).toFixed(2)} $</p>
+							{joueur.pendingAction && (
+								<p className="has-text-warning">
+									{joueur.pendingAction === "double"
+										? "En attente de la carte du double devant la caméra."
+										: "En attente de la carte demandée devant la caméra."}
+								</p>
+							)}
+							{mains.map((main, index) => {
+								const resultat = texteResultat(main.resultat ?? joueur.resultats?.[index]);
+								return (
+									<div className="bj-main-live-cartes" key={`main-${index}`}>
+										<CartesDetectees cartes={main.cartes} />
+										<p>
+											Total : {totalMain(main.cartes)}
+											<span className="ml-3">Mise de la main : {Number(main.mise ?? joueur.bet ?? 0).toFixed(2)} $</span>
+										</p>
+										{resultat && <span className={`tag is-medium ${resultat === "Gagné" || resultat === "Blackjack" ? "is-success" : resultat === "Égalité" ? "is-light" : "is-danger"}`}>
+											{resultat}
+											{Number(main.gain) > 0 && ` · Retour : ${Number(main.gain).toFixed(2)} $`}
+										</span>}
+									</div>
+								);
+							})}
+						</article>
+					);
+				})}
+				{joueurs.length === 0 && <p className="bj-cartes-attente">Aucun joueur n’a rejoint cette table.</p>}
+			</div>
+		</section>
+	);
+}
+
 /** Entrée : aucune (l'id du salon vient de l'URL); sortie : le JSX de la table filmée. */
 function BlackjackCamera() {
 	const { id: salonId } = useParams();
@@ -119,8 +233,9 @@ function BlackjackCamera() {
 	const [chargement, setChargement] = useState(false);
 	const [statutCamera, setStatutCamera] = useState(null);
 	const [montantMise, setMontantMise] = useState("");
+	const [solde, setSolde] = useState(null);
+	const revisionSolde = useRef(0);
 	const videoRef = useRef(null);
-	const [joueursEnLigne, setJoueursEnLigne] = useState([]);
 	const [maintenant, setMaintenant] = useState(Date.now);
 
 	useEffect(() => {
@@ -136,9 +251,8 @@ function BlackjackCamera() {
 			if (reponse?.role) setRole(reponse.role);
 			if (reponse?.salon) setSalon(reponse.salon);
 		});
-		const surMiseAJour = ({ salon: salonMaj, joueursEnLigne: joueursEnLigne } = {}) => {
+		const surMiseAJour = ({ salon: salonMaj } = {}) => {
 			if (salonMaj) setSalon(salonMaj);
-			if (joueursEnLigne) setJoueursEnLigne(joueursEnLigne);
 		};
 		// Le dealer a fermé le salon : retour au lobby
 		const surFermeture = () => navigate("/", { replace: true, state: { message: "Ce salon a été fermé." } });
@@ -154,6 +268,36 @@ function BlackjackCamera() {
 	}, [socket, salonId, navigate]);
 
 	useEffect(() => {
+		if (role !== "joueur") return undefined;
+		const token = localStorage.getItem("token");
+		if (!token) return undefined;
+
+		const controleur = new AbortController();
+		let annule = false;
+		const revisionAuChargement = revisionSolde.current;
+		fetch(`${API_URL}/solde`, {
+			signal: controleur.signal,
+			headers: { Authorization: `Bearer ${token}` },
+		})
+			.then(async (response) => {
+				const donnees = await response.json();
+				if (!response.ok) throw new Error(donnees.message || "Impossible de charger votre solde.");
+				if (typeof donnees.solde !== "number") throw new Error("Le solde reçu est invalide.");
+				if (!annule && revisionSolde.current === revisionAuChargement) setSolde(donnees.solde);
+			})
+			.catch((erreur) => {
+				if (!annule && !controleur.signal.aborted) {
+					setMessage(erreur.message || "Impossible de charger votre solde.");
+				}
+			});
+
+		return () => {
+			annule = true;
+			controleur.abort();
+		};
+	}, [role, salonId]);
+
+	useEffect(() => {
                 if (salon?.status !== "waiting" || !salon?.debut_manche) return undefined;
                 const minuterie = window.setInterval(() => setMaintenant(Date.now()), 250);
                 return () => window.clearInterval(minuterie);
@@ -163,6 +307,16 @@ function BlackjackCamera() {
                 : null;
 
 	const moi = salon?.players?.find((player) => String(player.id_compte) === String(lireUtilisateur()?.id));
+	const maMain = moi?.hands?.[0];
+	const peutAgir = role === "joueur"
+		&& salon?.status === "playing"
+		&& moi?.isTurn
+		&& moi?.status === "playing"
+		&& !moi?.pendingAction;
+	const peutDoubler = peutAgir
+		&& maMain?.cartes?.length === 2
+		&& solde !== null
+		&& solde >= Number(maMain.mise ?? moi.bet);
 
 	/** Entrée : nom de l'événement; sortie : Promise de la réponse du serveur (erreur si pas de réponse en 5 s). */
 	function demander(evenement, ...donnees) {
@@ -198,13 +352,49 @@ function BlackjackCamera() {
 
 	async function miser(evenement) {
 		evenement.preventDefault();
-        const mise = Number(montantMise);
-        if (!Number.isFinite(mise) || mise <= 0) return setMessage("Entrez une mise plus grande que 0.");
-        setChargement(true);
-        const reponse = await demander("game:miser", { mise });
-        setChargement(false);
-        if (reponse?.error) return setMessage(reponse.error);
-        setMontantMise("");
+		const mise = Number(montantMise);
+		if (!Number.isFinite(mise) || mise <= 0) return setMessage("Entrez une mise plus grande que 0.");
+		setChargement(true);
+		const reponse = await demander("game:miser", { mise });
+		setChargement(false);
+		if (reponse?.error) return setMessage(reponse.error);
+		if (typeof reponse?.solde === "number") {
+			revisionSolde.current++;
+			setSolde(reponse.solde);
+			notifierSoldeMisAJour(reponse.solde);
+		}
+		setMontantMise("");
+	}
+
+	async function actionJoueur(action) {
+		if (!peutAgir || !["hit", "stand", "double"].includes(action)) return;
+		setMessage("");
+		setChargement(true);
+		try {
+			const token = localStorage.getItem("token");
+			const response = await fetch(`${API_URL}/gameStatus`, {
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+				body: JSON.stringify({ salonId, action }),
+			});
+			const donnees = await response.json();
+			if (!response.ok) throw new Error(donnees.message || "L’action n’a pas pu être appliquée.");
+			if (!donnees.gameStatus) throw new Error("Le serveur n’a pas retourné l’état de la manche.");
+
+			setSalon((salonPrecedent) => ({ ...salonPrecedent, ...donnees.gameStatus }));
+			if (typeof donnees.solde === "number") {
+				revisionSolde.current++;
+				setSolde(donnees.solde);
+				notifierSoldeMisAJour(donnees.solde);
+			}
+		} catch (erreur) {
+			setMessage(erreur.message || "Impossible de joindre le serveur. Réessayez.");
+		} finally {
+			setChargement(false);
+		}
 	}
 
 	useCaptureCamera(filme, socket, videoRef, setStatutCamera);
@@ -229,7 +419,7 @@ function BlackjackCamera() {
 						</div></div>
 					</div>
 
-					<div className="columns">
+					<div className="columns bj-camera-columns">
 						<div className="column">
 							<div className="bj-table">
 								<div className="level is-mobile">
@@ -242,36 +432,92 @@ function BlackjackCamera() {
 								<h1 className="title has-text-centered">Blackjack</h1>
 								<p className="subtitle is-6 has-text-centered">{filme ? "Vous filmez cette table" : "Table réelle en direct"}</p>
 
-								<div className="bj-zone">
-									<div className="bj-camera">
-										{filme
-											? <video ref={videoRef} muted playsInline aria-label="Aperçu de votre caméra" />
-											: image
-												? <img src={image} alt="Caméra de la table" />
-												: <p className="bj-camera-attente">En attente de la caméra du dealer...</p>}
+								<div className="bj-live-layout" role="group" aria-label="Caméra et état de la manche">
+									<aside className="bj-live-state">
+										<TableauPartie salon={salon} idCompte={lireUtilisateur()?.id} compact />
+									</aside>
+									<div className="bj-camera-zone">
+										<div className="bj-camera">
+											{filme
+												? <video ref={videoRef} muted playsInline aria-label="Aperçu de votre caméra" />
+												: image
+													? <img src={image} alt="Caméra de la table" />
+													: <p className="bj-camera-attente">En attente de la caméra du dealer...</p>}
+										</div>
+
+										{secondesAvantManche !== null && <p className="has-text-centered mt-4">
+											<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
+										</p>}
+
+									{role === "joueur" && salon?.status === "waiting" && Number(moi?.bet) > 0 && (
+										<p className="has-text-centered mt-4">
+											<span className="tag is-medium is-warning">Votre mise : {Number(moi.bet).toFixed(2)} $</span>
+										</p>
+									)}
+									{role === "joueur" && (salon?.status === "finished"
+										|| (salon?.status === "waiting" && Number(moi?.bet ?? 0) === 0)) && (
+										<form className="field has-addons has-addons-centered mt-4" onSubmit={miser}>
+											<div className="control">
+												<input
+													className="input"
+													type="number"
+													min="0.01"
+													step="0.01"
+													placeholder={salon?.status === "finished" ? "Mise pour la prochaine manche" : "Montant"}
+													aria-label="Montant de la mise"
+													value={montantMise}
+													onChange={(e) => setMontantMise(e.target.value)}
+													disabled={chargement}
+												/>
+											</div>
+											<div className="control">
+												<button className="button is-warning" type="submit" disabled={chargement}>
+													{salon?.status === "finished" ? "Miser pour rejouer" : "Miser"}
+												</button>
+											</div>
+										</form>
+									)}
+									{role === "joueur" && salon?.status === "playing" && Number(moi?.bet ?? 0) === 0 && (
+										<p className="has-text-centered mt-4" role="status">La manche est en cours. Vous pourrez miser à la prochaine manche.</p>
+									)}
+									{role === "joueur" && solde !== null && (
+										<p className="has-text-centered mt-3">Solde disponible : {solde.toFixed(2)} $</p>
+									)}
+									{role === "joueur" && (
+										<div className="buttons is-centered mt-4" aria-label="Actions de blackjack">
+											<button
+												className="button is-light is-medium"
+												type="button"
+												onClick={() => actionJoueur("hit")}
+												disabled={!peutAgir || chargement}
+											>
+												<span className="icon"><i className="fas fa-plus" /></span><span>Tirer</span>
+											</button>
+											<button
+												className="button is-light is-medium"
+												type="button"
+												onClick={() => actionJoueur("stand")}
+												disabled={!peutAgir || chargement}
+											>
+												<span className="icon"><i className="fas fa-hand-paper" /></span><span>Rester</span>
+											</button>
+											<button
+												className="button is-warning is-medium"
+												type="button"
+												onClick={() => actionJoueur("double")}
+												disabled={!peutDoubler || chargement}
+												title={solde === null ? "Solde indisponible" : "Disponible avec deux cartes et un solde suffisant"}
+											>
+												<span className="icon"><i className="fas fa-coins" /></span><span>Doubler</span>
+											</button>
+										</div>
+									)}
 									</div>
-
-									{secondesAvantManche !== null && <p className="has-text-centered mt-4">
-										<span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
-									</p>}
-									{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
-
-									{role === "joueur" && (Number(moi?.bet) > 0
-										? <p className="has-text-centered mt-4"><span className="tag is-medium is-warning">Votre mise : {moi.bet} $</span></p>
-										: salon?.status !== "playing" && <form className="field has-addons has-addons-centered mt-4" onSubmit={miser}>
-												<div className="control">
-														<input className="input" type="number" min="0.01" step="0.01" placeholder="Montant"
-																value={montantMise} onChange={(e) => setMontantMise(e.target.value)} disabled={chargement} />
-												</div>
-												<div className="control">
-														<button className="button is-warning" type="submit" disabled={chargement}>Miser</button>
-												</div>
-										</form>)}
 								</div>
 							</div>
 						</div>
 						{/* Chat de la table : même socket que la page (connecterSocket retourne toujours la même connexion) */}
-						<div className="column is-narrow">
+						<div className="column is-narrow bj-camera-chat-column">
 							<Chat salonId={salonId} />
 						</div>
 					</div>
@@ -301,7 +547,6 @@ function BlackjackCamera() {
                                 {secondesAvantManche !== null && <p className="has-text-centered mt-4">
                                     <span className="tag is-medium is-info">Début de la manche dans {secondesAvantManche} s</span>
                                 </p>}
-								{salon?.status === "playing" && <p className="has-text-centered mt-4"><span className="tag is-medium is-success">Manche en cours</span></p>}
 							</div>
 
 							<Chat salonId={salonId} />
@@ -325,20 +570,7 @@ function BlackjackCamera() {
 							)}
 						</div>
 						<div className="bj-joueurs-cartes">
-							{/* <h3>Joueurs en ligne ({joueursEnLigne.length})</h3> */}
-
-							<ul>
-								{joueursEnLigne.map((nom) => (
-									<div className="card bj-joueur-card">
-										<div className="card-content">
-											<p className="title is-5 mb-3">🟢 {nom}</p>
-											<p className="">Action : </p>
-											<p className="">Score main : </p>
-											<p className="">Mise : </p>
-										</div>
-									</div>
-								))}
-							</ul>
+							<TableauPartie salon={salon} idCompte={null} />
 						</div>
 					</div>
 				</>

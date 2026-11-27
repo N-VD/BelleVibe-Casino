@@ -194,8 +194,6 @@ function Blackjack({ salon, setSalon, setIsLoggedIn, setSoldeGlobal, retourAuxSa
 		}
 		setSabot(nextDeck);
 		setResultats(prochainsResultats);
-		const socket = connecterSocket();
-		socket.emit("game:action", { salonMaj: salonMisAJour }); // le serveur connaît déjà le salon de ce socket
 		window.clearTimeout(minuterieAnimation.current);
 		if (nouveauPlan.duree > 0) {
 			setPlanAnimation(nouveauPlan);

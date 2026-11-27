@@ -5,11 +5,13 @@ const Compte = require("../models/compte");
 const Transaction = require("../models/transaction");
 const { lireToken } = require("../fonctionsCommunes");
 const { roleDansSalon, vuePourRole } = require("../jeux/vueTable");
-const { attribuerMains } = require("../jeux/mainsDetectees");
+const { appliquerCartesDetectees, avancerTour } = require("../jeux/partieSalon");
+const { tenterReglementManche } = require("../jeux/reglementManche");
 const { initialiserChat } = require("./chat");
 
 let io = null; // gardé pour notifierSalonFerme (appelé depuis la route DELETE /deleteSalon)
 const departs = new Map(); // "salonId:compteId" -> minuterie d'un joueur déconnecté sans prévenir
+const retraitsEnAttente = new Map(); // départs différés pendant le verrou du règlement
 const debutsManche = new Map(); // salonId -> { minuterie, debut } : délai des mises avant la manche
 
 function avecDebutManche(salonId, salon) {
@@ -35,24 +37,125 @@ async function diffuserTable(salonId, salon) {
 	}
 }
 
-/** Entrées : salon et compte; retire le joueur (sa main est perdue), sauvegarde et prévient la table. */
-async function retirerJoueur(salonId, compteId) {
-	const salon = await Salon.findById(salonId);
-	if (!salon) return;
-	const restants = salon.players.filter(
-		(player) => String(player.id_compte) !== String(compteId),
-	);
-	if (restants.length === salon.players.length) return; // déjà parti
-	salon.players = restants;
-	salon.updated_at = new Date();
-	await salon.save();
-	await diffuserTable(String(salon._id), salon.toObject());
+/** Diffuse un salon déjà sauvegardé, avec la vue appropriée à chaque rôle. */
+async function notifierSalonMisAJour(salon) {
+	if (!io || !salon) return;
+	const donnees = typeof salon.toObject === "function" ? salon.toObject() : salon;
+	const salonId = String(donnees._id ?? donnees.id);
+	await diffuserTable(salonId, donnees);
+}
+
+function prochaineDate(date) {
+	const precedent = date ? new Date(date).getTime() : 0;
+	return new Date(Math.max(Date.now(), precedent + 1));
+}
+
+/** Enregistre une détection seulement si le salon n'a pas changé entre lecture et écriture. */
+async function traiterDetection(salonId, mains) {
+	for (let tentative = 0; tentative < 3; tentative++) {
+		const salon = await Salon.findById(salonId);
+		if (!salon) return null;
+
+		const datePrecedente = salon.updated_at;
+		if (!appliquerCartesDetectees(salon, mains)) return null;
+		salon.updated_at = prochaineDate(datePrecedente);
+		const salonMisAJour = await Salon.findOneAndUpdate(
+			{ _id: salonId, status: salon.status, updated_at: datePrecedente },
+			{
+				$set: {
+					dealer_hand: salon.dealer_hand,
+					players: salon.players,
+					currentTurnSeat: salon.currentTurnSeat,
+					updated_at: salon.updated_at,
+				},
+			},
+			{ new: true, runValidators: true },
+		);
+		if (salonMisAJour) return salonMisAJour;
+	}
+	throw new Error(`Impossible d'enregistrer la détection du salon ${salonId} après plusieurs tentatives.`);
+}
+
+/** Retire le joueur sans écraser un règlement ou une mise à jour concurrente du salon. */
+async function retirerJoueur(salonId, compteId, tentativeReglement = 0) {
+	const cle = `${salonId}:${compteId}`;
+	for (let tentative = 0; tentative < 3; tentative++) {
+		const salon = await Salon.findById(salonId);
+		if (!salon) {
+			retraitsEnAttente.delete(cle);
+			return;
+		}
+		if (tentativeReglement > 0 && !retraitsEnAttente.has(cle)) return;
+		if (salon.status === "settling") {
+			if (tentativeReglement >= 20) {
+				console.error(`Le retrait du joueur ${compteId} reste en attente du règlement du salon ${salonId}.`);
+				retraitsEnAttente.delete(cle);
+				return;
+			}
+			if (!retraitsEnAttente.get(cle)) {
+				const minuterie = setTimeout(() => {
+					if (!retraitsEnAttente.has(cle)) return;
+					retraitsEnAttente.set(cle, null);
+					retirerJoueur(salonId, compteId, tentativeReglement + 1)
+						.catch((erreurRetrait) => console.error("Erreur du retrait différé :", erreurRetrait));
+				}, 100);
+				retraitsEnAttente.set(cle, minuterie);
+			}
+			return;
+		}
+
+		const statutPrecedent = salon.status;
+		const restants = salon.players.filter(
+			(player) => String(player.id_compte) !== String(compteId),
+		);
+		if (restants.length === salon.players.length) {
+			retraitsEnAttente.delete(cle);
+			return; // déjà parti
+		}
+		salon.players = restants;
+		if (salon.status === "playing") {
+			avancerTour(salon);
+			if (!salon.players.some((player) => Number(player.bet) > 0)) {
+				salon.status = "finished";
+				salon.currentTurnSeat = -1;
+			}
+		}
+
+		const salonMisAJour = await Salon.findOneAndUpdate(
+			{ _id: salonId, status: statutPrecedent, updated_at: salon.updated_at },
+			{
+				$set: {
+					status: salon.status,
+					players: salon.players,
+					currentTurnSeat: salon.currentTurnSeat,
+					updated_at: prochaineDate(salon.updated_at),
+				},
+			},
+			{ new: true, runValidators: true },
+		);
+		if (!salonMisAJour) continue;
+
+		retraitsEnAttente.delete(`${salonId}:${compteId}`);
+		await notifierSalonMisAJour(salonMisAJour);
+		if (salonMisAJour.status === "playing") {
+			try {
+				await tenterReglementManche(String(salonMisAJour._id), notifierSalonMisAJour);
+			} catch (erreurReglement) {
+				console.error("Erreur du règlement blackjack après le départ d'un joueur :", erreurReglement);
+			}
+		}
+		return;
+	}
+	retraitsEnAttente.delete(cle);
+	throw new Error(`Impossible d'enregistrer le départ du joueur ${compteId} du salon ${salonId}.`);
 }
 
 function annulerDepart(salonId, compteId) {
 	const cle = `${salonId}:${compteId}`;
 	clearTimeout(departs.get(cle));
 	departs.delete(cle);
+	clearTimeout(retraitsEnAttente.get(cle));
+	retraitsEnAttente.delete(cle);
 }
 
 /** Entrées : salon et délai (ms); lance la minuterie qui démarre la manche. */
@@ -69,8 +172,21 @@ async function demarrerManche(salonId) {
         const salon =
                 (await Salon.findOneAndUpdate(
                         { _id: salonId, status: "waiting", "players.bet": { $gt: 0 } },
-                        { $set: { status: "playing", updated_at: new Date() } },
-                        { returnDocument: "after" },
+                        {
+							$set: {
+								status: "playing",
+								dealer_hand: [],
+								currentTurnSeat: -1,
+								"players.$[].hands": [],
+								"players.$[].resultats": [],
+								"players.$[].activeHand": 0,
+								"players.$[].status": "waiting",
+								"players.$[].pendingAction": null,
+								"players.$[].isTurn": false,
+								updated_at: new Date(),
+							},
+						},
+                        { new: true },
                 ))
                 // Plus aucune mise (joueurs partis) : rien ne démarre, mais la table doit voir le compte à rebours disparaître
                 ?? (await Salon.findById(salonId));
@@ -128,11 +244,15 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 							`Salon introuvable pour cartes (service de détection) : ${salonId}`,
 						);
 
-					// Les cartes de la caméra deviennent l'état du salon, puis chaque navigateur reçoit game:update
-					attribuerMains(salon, mains);
-					salon.updated_at = new Date();
-					await salon.save();
-					await diffuserTable(String(salon._id), salon.toObject());
+					// Les snapshots complets avancent les mains; une carte attendue n'est validée qu'une fois détectée.
+					const salonMisAJour = await traiterDetection(String(salon._id), mains);
+					if (!salonMisAJour) return;
+					await notifierSalonMisAJour(salonMisAJour);
+					try {
+						await tenterReglementManche(String(salon._id), notifierSalonMisAJour);
+					} catch (erreurReglement) {
+						console.error("Erreur du règlement blackjack après détection :", erreurReglement);
+					}
 				} catch (err) {
 					console.error(err);
 					console.error("Erreur du serveur : cartes (service de détection).");
@@ -172,15 +292,6 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 			}
 		});
 
-		// Action de jeu (joueur ou dealer seulement). Le salon est celui du "join" : le client ne peut pas en viser un autre.
-		socket.on("game:action", async ({ salonMaj } = {}) => {
-			const { salonId, role } = socket.data;
-			if (!salonId || (role !== "joueur" && role !== "dealer")) return;
-			if (!salonMaj || typeof salonMaj !== "object") return;
-			await diffuserTable(salonId, salonMaj);
-		});
-
-
 		socket.on("game:miser", async ({ mise } = {}, ack) => {
 				const repondre = typeof ack === "function" ? ack : () => {};
 				const { salonId, role, user } = socket.data;
@@ -189,19 +300,45 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 				if (typeof mise !== "number" || !Number.isFinite(mise) || mise <= 0)
 						return repondre({ error: "Mise invalide." });
 				const montant = Math.round(mise * 100) / 100; // au cent près
+				if (montant <= 0)
+						return repondre({ error: "La mise doit être d’au moins un cent." });
+				let miseReservee = false;
+				let compteDebite = false;
+				let transaction = null;
 
 				try {
-						// 1. Réserver la mise : ne passe que si la manche n'est pas commencée et que le joueur n'a pas déjà misé
+						// Une nouvelle mise après la manche terminée réinitialise la table avant de la réserver.
+						await Salon.updateOne(
+								{ _id: salonId, status: "finished" },
+								{
+										$set: {
+												status: "waiting",
+												dealer_hand: [],
+												currentTurnSeat: -1,
+												"players.$[].hands": [],
+												"players.$[].resultats": [],
+												"players.$[].activeHand": 0,
+												"players.$[].bet": 0,
+												"players.$[].status": "waiting",
+												"players.$[].pendingAction": null,
+												"players.$[].isTurn": false,
+												updated_at: new Date(),
+										},
+								},
+						);
+
+						// Réserver la mise seulement pendant la période d'attente et une fois par joueur.
 						const reserve = await Salon.updateOne(
 								{
 										_id: salonId,
-										status: { $ne: "playing" },
+										status: "waiting",
 										players: { $elemMatch: { id_compte: user.id, bet: 0 } },
 								},
 								{ $set: { "players.$.bet": montant, updated_at: new Date() } },
 						);
 						if (reserve.modifiedCount === 0)
 								return repondre({ error: "Mise impossible (manche en cours ou déjà misé)." });
+						miseReservee = true;
 
 						// 2. Débiter le compte seulement si le solde suffit (une seule opération Mongo : pas de double débit)
 						const compte = await Compte.findOneAndUpdate(
@@ -210,24 +347,58 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 								{ new: true },
 						);
 						if (!compte) {
-								// 3. Solde insuffisant : on annule la réservation
-								await Salon.updateOne(
-										{ _id: salonId, "players.id_compte": user.id },
-										{ $set: { "players.$.bet": 0 } },
-								);
+								await libererMiseReservee();
 								return repondre({ error: "Solde insuffisant." });
 						}
-						await Transaction.create({ id_compte: user.id, desc: "Mise blackjack en salon", montant: -montant });
+						compteDebite = true;
+						transaction = await Transaction.create({
+								id_compte: user.id,
+								desc: "Mise blackjack en salon",
+								montant: -montant,
+						});
 						// Première mise de la manche : has puis set sans await entre les deux, donc une seule minuterie même si deux joueurs misent en même temps
 						if (!debutsManche.has(salonId)) planifierDebut(salonId, delaiMisesMs);
 						
 						const salon = await Salon.findById(salonId);
-						if (salon) await diffuserTable(salonId, salon.toObject());
+						if (salon) {
+								try {
+										await notifierSalonMisAJour(salon);
+								} catch (erreurDiffusion) {
+										console.error("Échec de diffusion de la mise blackjack :", erreurDiffusion);
+								}
+						}
 						repondre({ ok: true, solde: compte.montant });
 				} catch (err) {
+						if (transaction) {
+								try {
+										await Transaction.findByIdAndDelete(transaction._id);
+								} catch (erreurTransaction) {
+										console.error("Échec de l’annulation de la transaction de mise :", erreurTransaction);
+								}
+						}
+						if (compteDebite) {
+								try {
+										await Compte.findByIdAndUpdate(user.id, { $inc: { montant } });
+								} catch (erreurCompte) {
+										console.error("Échec du remboursement de la mise blackjack :", erreurCompte);
+								}
+						}
+						if (miseReservee) await libererMiseReservee();
 						console.error(err);
 						console.error("Erreur du serveur : game:miser.");
 						repondre({ error: "Impossible de miser pour le moment." });
+				}
+
+				/** Annule la réservation si le débit ou l'enregistrement de la mise échoue. */
+				async function libererMiseReservee() {
+						try {
+								await Salon.updateOne(
+										{ _id: salonId, status: "waiting", "players.id_compte": user.id },
+										{ $set: { "players.$.bet": 0, updated_at: new Date() } },
+								);
+						} catch (erreurReservation) {
+								console.error("Échec de la libération de la mise blackjack :", erreurReservation);
+						}
 				}
 		});
 
@@ -261,11 +432,14 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 			try {
 				const salon = await Salon.findById(salonId);
 				if (!salon) return repondre({ error: "Salon introuvable." });
-				if (salon.status === "playing")
+				const salonSupprime = await Salon.findOneAndDelete({
+					_id: salonId,
+					status: { $nin: ["playing", "settling"] },
+				});
+				if (!salonSupprime)
 					return repondre({
 						error: "Le salon ne peut pas être fermé pendant une partie.",
 					});
-				await Salon.findByIdAndDelete(salonId);
 				notifierSalonFerme(salonId);
 				repondre({ ok: true });
 			} catch (err) {
@@ -307,4 +481,10 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 	return io;
 }
 
-module.exports = { initialiserSocketServer, notifierSalonFerme };
+module.exports = {
+	initialiserSocketServer,
+	notifierSalonFerme,
+	notifierSalonMisAJour,
+	retirerJoueur,
+	annulerDepart,
+};
