@@ -202,7 +202,6 @@ function TableauPartie({ salon, idCompte, compact = false }) {
 										<CartesDetectees cartes={main.cartes} />
 										<p>
 											Total : {totalMain(main.cartes)}
-											<span className="ml-3">Mise de la main : {Number(main.mise ?? joueur.bet ?? 0).toFixed(2)} $</span>
 										</p>
 										{resultat && <span className={`tag is-medium ${resultat === "Gagné" || resultat === "Blackjack" ? "is-success" : resultat === "Égalité" ? "is-light" : "is-danger"}`}>
 											{resultat}
@@ -237,6 +236,8 @@ function BlackjackCamera() {
 	const revisionSolde = useRef(0);
 	const videoRef = useRef(null);
 	const [maintenant, setMaintenant] = useState(Date.now);
+
+	const mancheFinie = salon?.status === "finished";
 
 	useEffect(() => {
 		socket.connect(); // reconnecte le même socket si le composant est remonté (StrictMode)
@@ -283,7 +284,10 @@ function BlackjackCamera() {
 				const donnees = await response.json();
 				if (!response.ok) throw new Error(donnees.message || "Impossible de charger votre solde.");
 				if (typeof donnees.solde !== "number") throw new Error("Le solde reçu est invalide.");
-				if (!annule && revisionSolde.current === revisionAuChargement) setSolde(donnees.solde);
+				if (!annule && revisionSolde.current === revisionAuChargement) {
+					setSolde(donnees.solde);
+					notifierSoldeMisAJour(donnees.solde);
+				}
 			})
 			.catch((erreur) => {
 				if (!annule && !controleur.signal.aborted) {
@@ -295,7 +299,7 @@ function BlackjackCamera() {
 			annule = true;
 			controleur.abort();
 		};
-	}, [role, salonId]);
+	}, [role, salonId, mancheFinie]); // recharge le solde après la fin d'une manche
 
 	useEffect(() => {
                 if (salon?.status !== "waiting" || !salon?.debut_manche) return undefined;

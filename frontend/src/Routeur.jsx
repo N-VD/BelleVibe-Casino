@@ -59,6 +59,16 @@ function Routeur() {
 		};
 	}, [isLoggedIn]);
 
+	// Les pages qui changent le solde (ex. fin de manche) le signalent par "solde:mis-a-jour" (services/solde.js)
+	useEffect(() => {
+		const mettreAJourSolde = (event) => {
+			const nouveauSolde = event.detail?.solde;
+			if (typeof nouveauSolde === "number") setSolde(nouveauSolde);
+		};
+		window.addEventListener("solde:mis-a-jour", mettreAJourSolde);
+		return () => window.removeEventListener("solde:mis-a-jour", mettreAJourSolde);
+	}, []);
+
 	const fond = <Salon isLoggedIn={false} setIsLoggedIn={setIsLoggedIn} setSoldeGlobal={setSolde} />;
 
 	return (

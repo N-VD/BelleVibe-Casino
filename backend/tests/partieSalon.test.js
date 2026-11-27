@@ -142,6 +142,34 @@ test('le règlement attend la main du croupier et prépare les gains enregistré
     assert.equal(salon.currentTurnSeat, -1);
 });
 
+test('un blackjack est réglé sans 2e carte si la carte du croupier ne peut pas faire 21', () => {
+    const salon = salonAvecJoueurs();
+    appliquerCartesDetectees(salon, detection([['A', 'K']], ['7']));
+
+    assert.equal(salon.players[0].status, 'blackjack');
+    assert.equal(reglementPret(salon), true);
+    const historiques = reglerMains(salon);
+    assert.equal(historiques[0].outcome, 'blackjack');
+    assert.equal(historiques[0].payout, 25);
+});
+
+test('un blackjack attend la 2e carte si le croupier montre un as ou un 10', () => {
+    for (const visible of ['A', '10', 'K']) {
+        const salon = salonAvecJoueurs();
+        appliquerCartesDetectees(salon, detection([['A', 'K']], [visible]));
+
+        assert.equal(reglementPret(salon), false, `croupier ${visible}`);
+    }
+});
+
+test('un blackjack et une main stand attendent toujours le croupier', () => {
+    const salon = salonAvecJoueurs(2);
+    appliquerCartesDetectees(salon, detection([['A', 'K'], ['10', '8']], ['7']));
+    appliquerActionJoueur(salon, 'joueur-1', 'stand', 0);
+
+    assert.equal(reglementPret(salon), false);
+});
+
 test('toutes les mains bust peuvent être réglées sans attendre le croupier', () => {
     const salon = salonAvecJoueurs();
     appliquerCartesDetectees(salon, detection([['10', '8']]));
