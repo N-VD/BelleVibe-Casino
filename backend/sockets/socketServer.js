@@ -46,6 +46,7 @@ async function retirerJoueur(salonId, compteId) {
 	salon.players = restants;
 	salon.updated_at = new Date();
 	await salon.save();
+	notifierLobby(); // une place se libère
 	await diffuserTable(String(salon._id), salon.toObject());
 }
 
@@ -66,15 +67,21 @@ function planifierDebut(salonId, delai) {
 
 /** Entrée : salon; fin du délai des mises : la manche commence s'il reste au moins une mise, et la table est prévenue. */
 async function demarrerManche(salonId) {
-        const salon =
-                (await Salon.findOneAndUpdate(
-                        { _id: salonId, status: "waiting", "players.bet": { $gt: 0 } },
-                        { $set: { status: "playing", updated_at: new Date() } },
-                        { returnDocument: "after" },
-                ))
-                // Plus aucune mise (joueurs partis) : rien ne démarre, mais la table doit voir le compte à rebours disparaître
-                ?? (await Salon.findById(salonId));
+        const demarre = await Salon.findOneAndUpdate(
+                { _id: salonId, status: "waiting", "players.bet": { $gt: 0 } },
+                { $set: { status: "playing", updated_at: new Date() } },
+                { returnDocument: "after" },
+        );
+        if (demarre) notifierLobby(); // le salon passe « En cours »
+        // Plus aucune mise (joueurs partis) : rien ne démarre, mais la table doit voir le compte à rebours disparaître
+        const salon = demarre ?? (await Salon.findById(salonId));
         if (salon) await diffuserTable(salonId, salon.toObject());
+}
+
+/** Aucune entrée; signale au lobby que la liste des salons a changé (il relance GET /salons). Sans io (tests HTTP) : rien. */
+function notifierLobby() {
+	if (!io) return;
+	io.to("lobby").emit("salons:changed");
 }
 
 /** Entrée : id du salon supprimé; prévient la table ("salon:closed") et vide sa room. */
@@ -83,6 +90,7 @@ function notifierSalonFerme(salonId) {
 	const room = String(salonId);
 	io.to(room).emit("salon:closed", { salonId: room });
 	io.in(room).socketsLeave(room);
+	notifierLobby(); // le salon disparaît de la liste
 	for (const [cle, minuterie] of departs) {
 		if (cle.startsWith(`${room}:`)) {
 			clearTimeout(minuterie);
@@ -302,9 +310,13 @@ function initialiserSocketServer(httpServer, { delaiRetourMs = 30_000, delaiMise
 				}, delaiRetourMs),
 			);
 		});
+
+		// Lobby (Salon.jsx) : reçoit "salons:changed" quand la liste change. Ouvert aux invités, aucune donnée envoyée
+		socket.on("lobby:rejoindre", () => socket.join("lobby"));
+		socket.on("lobby:quitter", () => socket.leave("lobby"));
 	});
 
 	return io;
 }
 
-module.exports = { initialiserSocketServer, notifierSalonFerme };
+module.exports = { initialiserSocketServer, notifierSalonFerme, notifierLobby };

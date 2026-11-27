@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { connecterSocket } from "../services/socket.js";
+
 import {
 	API_URL,
 	idSalon,
@@ -70,27 +72,43 @@ function Salon({ setIsLoggedIn }) {
 		}
 	};
 
-	// Le lobby est en HTTP seulement : la connexion Socket.IO (et le "join") appartient à la table
-	// Premier chargement : les états sont modifiés dans le .then, pas directement dans l'effet (règle du lint)
+	// La liste vient de GET /salons (filtrée selon le rôle). Le socket envoie seulement le signal "salons:changed"
+	// (room "lobby") pour la recharger; le "join" d'un salon reste à la table.
+	// Les états sont modifiés dans le .then, pas directement dans l'effet (règle du lint)
 	useEffect(() => {
 		let annule = false; // le composant a été démonté avant la réponse
-		envoyer("/salons")
-			.then(({ response, data, token }) => {
-				if (annule) return;
-				if (response.status === 401 && token) {
-					localStorage.removeItem("token");
-					setIsLoggedIn(false);
-				} else if (!response.ok) {
-					setMessage(data.message || "Erreur du serveur.");
-				} else if (data.salons) {
-					setSalons(data.salons);
-				}
-			})
-			.catch(() => {
-				if (!annule) setMessage("Impossible de joindre le serveur. Réessayez plus tard.");
-			});
+		const charger = () => {
+			envoyer("/salons")
+				.then(({ response, data, token }) => {
+					if (annule) return;
+					if (response.status === 401 && token) {
+						localStorage.removeItem("token");
+						setIsLoggedIn(false);
+					} else if (!response.ok) {
+						setMessage(data.message || "Erreur du serveur.");
+					} else if (data.salons) {
+						setSalons(data.salons);
+					}
+				})
+				.catch(() => {
+					if (!annule) setMessage("Impossible de joindre le serveur. Réessayez plus tard.");
+				});
+		};
+
+		const socket = connecterSocket();
+		const rejoindre = () => socket.emit("lobby:rejoindre");
+
+		charger();
+		rejoindre();
+		socket.on("connect", rejoindre); // re-rejoindre après une reconnexion (le serveur oublie les rooms)
+		socket.on("salons:changed", charger);
+
 		return () => {
 			annule = true;
+			// Pas de deconnecterSocket() : la table réutilise la même connexion juste après
+			socket.emit("lobby:quitter");
+			socket.off("connect", rejoindre);
+			socket.off("salons:changed", charger);
 		};
 	}, [setIsLoggedIn]);
 

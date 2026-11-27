@@ -4,7 +4,7 @@ const { authentifier, authentifierOptionnel } = require('../fonctionsCommunes');
 const Salon = require('../models/salon');
 const Compte = require('../models/compte');
 const Transaction = require('../models/transaction');
-const { notifierSalonFerme } = require('../sockets/socketServer');
+const { notifierSalonFerme, notifierLobby } = require('../sockets/socketServer');
 const { retourJoueur } = require('../jeux/reglementSalon');
 //const { verifierTimeoutEtLimite } = require('./Fontion/timeOut');
 const router = express.Router();
@@ -36,6 +36,7 @@ router.post('/createSalon', authentifier, async (req, res) => {
             players: [],
             currentTurnSeat: 0
         });
+        notifierLobby(); // le nouveau salon apparaît dans le lobby
 
         return res.status(201).json({ message: 'Salon créé', salon })
     } catch (error) {
@@ -120,6 +121,7 @@ router.post('/addPlayer', authentifier, async (req, res) => {
         salon.players.sort((a, b) => a.seat_index - b.seat_index);
         salon.updated_at = new Date();
         await salon.save();
+        notifierLobby(); // une place de moins
 
         return res.status(201).json({ message: 'Joueur ajouté au salon.', salon });
     } catch (error) {
@@ -321,6 +323,8 @@ router.patch('/gameStatus', authentifier, async (req, res) => {
             }
             throw error;
         }
+
+        if (hasStatus) notifierLobby(); // l'état (En attente / En cours) affiché dans le lobby a pu changer
 
         const compteActuel = await Compte.findById(req.user.id).select('montant');
 
