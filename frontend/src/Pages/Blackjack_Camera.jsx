@@ -238,6 +238,8 @@ function BlackjackCamera() {
 	const videoRef = useRef(null);
 	const [maintenant, setMaintenant] = useState(Date.now);
 
+	const mancheFinie = salon?.status === "finished";
+
 	useEffect(() => {
 		socket.connect(); // reconnecte le même socket si le composant est remonté (StrictMode)
 		return () => socket.disconnect();
@@ -283,7 +285,10 @@ function BlackjackCamera() {
 				const donnees = await response.json();
 				if (!response.ok) throw new Error(donnees.message || "Impossible de charger votre solde.");
 				if (typeof donnees.solde !== "number") throw new Error("Le solde reçu est invalide.");
-				if (!annule && revisionSolde.current === revisionAuChargement) setSolde(donnees.solde);
+				if (!annule && revisionSolde.current === revisionAuChargement) {
+					setSolde(donnees.solde);
+					notifierSoldeMisAJour(donnees.solde);
+				}
 			})
 			.catch((erreur) => {
 				if (!annule && !controleur.signal.aborted) {
@@ -295,7 +300,7 @@ function BlackjackCamera() {
 			annule = true;
 			controleur.abort();
 		};
-	}, [role, salonId]);
+	}, [role, salonId, mancheFinie]); // recharge le solde après la fin d'une manche
 
 	useEffect(() => {
                 if (salon?.status !== "waiting" || !salon?.debut_manche) return undefined;
