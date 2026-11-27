@@ -202,7 +202,6 @@ function TableauPartie({ salon, idCompte, compact = false }) {
 										<CartesDetectees cartes={main.cartes} />
 										<p>
 											Total : {totalMain(main.cartes)}
-											<span className="ml-3">Mise de la main : {Number(main.mise ?? joueur.bet ?? 0).toFixed(2)} $</span>
 										</p>
 										{resultat && <span className={`tag is-medium ${resultat === "Gagné" || resultat === "Blackjack" ? "is-success" : resultat === "Égalité" ? "is-light" : "is-danger"}`}>
 											{resultat}

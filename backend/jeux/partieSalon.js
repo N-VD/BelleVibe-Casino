@@ -1,6 +1,7 @@
 const {
     actionsPossibles,
     arrondir,
+    croupierPeutAvoirBlackjack,
     jouer,
     terminer,
     valeurMain,
@@ -227,7 +228,11 @@ function reglementPret(salon) {
         || player.pendingAction)) return false;
 
     if (joueurs.every((player) => player.status === 'bust')) return true;
-    if (salon.dealer_hand.length < 2) return false;
+    if (salon.dealer_hand.length < 2) {
+        // Blackjacks (et bust) seulement : inutile d'attendre la 2e carte si le croupier ne peut pas faire 21.
+        return joueurs.every((player) => ['blackjack', 'bust'].includes(player.status))
+            && !croupierPeutAvoirBlackjack(salon.dealer_hand);
+    }
     if (joueurs.some((player) => player.status === 'stand')) {
         return valeurMain(salon.dealer_hand) >= 17;
     }

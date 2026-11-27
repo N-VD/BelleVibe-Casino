@@ -35,6 +35,12 @@ function estBlackjackNaturel(cartes) {
     return cartes.length === 2 && valeurMain(cartes) === 21;
 }
 
+/** Indique si le croupier peut encore avoir un blackjack : seule sa carte visible est connue et c'est un as ou un 10. */
+function croupierPeutAvoirBlackjack(cartesCroupier) {
+    return cartesCroupier.length < 2
+        && (cartesCroupier.length === 0 || valeurCarte(cartesCroupier[0].rang) >= 10);
+}
+
 /** Arrondit les montants à deux décimales pour les calculs monétaires. */
 function arrondir(montant) {
     return Math.round(montant * 100) / 100;
@@ -137,8 +143,11 @@ function terminer(partie, cartesCroupier = partie.croupier) {
     const main = partie.mains[0];
     const joueurNaturel = main.statut === 'blackjack';
     const joueurBust = main.statut === 'bust';
-    // Il faut révéler la deuxième carte, sauf si le joueur a déjà dépassé 21.
-    if (cartesCroupier.length < 2 && !joueurBust) {
+    // Il faut révéler la deuxième carte, sauf si le joueur a dépassé 21
+    // ou s'il a un blackjack et que la carte visible du croupier (2 à 9) ne peut pas faire 21.
+    const croupierIncomplet = cartesCroupier.length < 2;
+    if (croupierIncomplet && !joueurBust
+        && !(joueurNaturel && !croupierPeutAvoirBlackjack(cartesCroupier))) {
         throw new RangeError('La main finale du croupier doit contenir au moins deux cartes.');
     }
     const totalCroupier = valeurMain(cartesCroupier);
@@ -180,6 +189,7 @@ module.exports = {
     jouer,
     terminer,
     actionsPossibles,
+    croupierPeutAvoirBlackjack,
     valeurMain,
     arrondir,
 };
